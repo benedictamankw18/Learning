@@ -1,0 +1,11 @@
+.git
+.gitignore
+README.md
+.DS_Store
+logs/*
+.env
+.env.docker
+vendor/bin
+tests
+.phpunit.result.cache
+.editorconfig
