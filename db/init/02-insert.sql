@@ -1,3 +1,14 @@
+-- ===========================================================================
+-- DEMO / LOCAL DEVELOPMENT DATA ONLY
+--
+-- This file creates demo institutions and a fixed `superadmin` account whose
+-- password hash is committed to the repository. Never expose an environment
+-- seeded with this file to the internet.
+--
+-- Before using this data anywhere beyond a local machine, rotate the account:
+--   php lms-api/scripts/create_superadmin.php --email=you@example.com --force
+-- and review/remove the demo institutions, users, and records below.
+-- ===========================================================================
 
 INSERT INTO `institution_settings` (`setting_id`, `institution_id`, `school_name`, `motto`, `description`, `vision`, `mission`, `logo_url`, `banner_url`, `theme_primary_color`, `theme_secondary_color`, `timezone`, `academic_year_start_month`, `academic_year_end_month`, `grading_system`, `locale`, `currency`, `date_format`, `time_format`, `allow_parent_registration`, `allow_student_self_enrollment`, `require_email_verification`, `meta`, `custom_css`, `custom_footer`, `social_facebook`, `social_twitter`, `social_instagram`, `social_linkedin`, `updated_at`) VALUES
 (1, 1, 'Accra Senior High School vvddre', 'Excellence Through Knowledge with fuck you', 'A leading Senior High School in Accra, Ghana, committed to academic excellence and holistic development.', 'To be the premier institution for secondary education in Ghana, producing well-rounded graduates.', 'To provide quality education that empowers students to excel academically and contribute positively to society.', '/uploads/institutions/69ff37243ee80_1778333476.jpg', '/uploads/institutions/69ff374137ab1_1778333505.jpg', '#ff4d00', '#e100ff', 'Africa/Accra', 1, 9, 'WAEC', 'en_US', 'GHS', 'DD/MM/YYYY', '12', 0, 0, 0, '{\"is_timetable_published\": \"1\"}', '', '', '', '', '', '', '2026-05-09 13:31:50');

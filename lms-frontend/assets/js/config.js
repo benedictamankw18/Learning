@@ -5,16 +5,10 @@
 const APP_NAME = 'Ghana SHS LMS';
 
 // Environment & API URL are injected by env.js, which must be loaded before this script.
-// Falls back to 'development' / localhost only when env.js is absent.
+// There is intentionally no fallback URL: an unset API_BASE_URL is a configuration error.
 const _env        = (typeof window !== 'undefined' && window.ENV_CONFIG) || {};
 const APP_ENV     = _env.APP_ENV      || 'development';
-const API_BASE_URL = _env.API_BASE_URL || 'http://192.168.0.184:8000';
-const Mail_HOST = _env.MAIL_HOST;
-const Mail_PORT = _env.MAIL_PORT;
-const Mail_USERNAME = _env.MAIL_USERNAME;
-const Mail_PASSWORD = _env.MAIL_PASSWORD;
-const Mail_FROM_ADDRESS = _env.MAIL_FROM_ADDRESS;
-const Mail_FROM_NAME = _env.MAIL_FROM_NAME;
+const API_BASE_URL = String(_env.API_BASE_URL || '').trim().replace(/\/$/, '');
 
 
 // API Endpoints
@@ -331,30 +325,13 @@ const REQUEST_TIMEOUT = 30000; // 30 seconds
 // Pagination
 const DEFAULT_PAGE_SIZE = 20;
 
-// Demo Credentials (for quick login)
-// These match the actual database setup from setup.sql
-const DEMO_CREDENTIALS = {
-    [USER_ROLES.SUPER_ADMIN]: {
-        login: 'superadmin',
-        password: 'Password@123',
-    },
-    [USER_ROLES.ADMIN]: {
-        login: 'admin',
-        password: 'Password@123',
-    },
-    [USER_ROLES.TEACHER]: {
-        login: 'kofi.mensah',
-        password: 'Password@123',
-    },
-    [USER_ROLES.STUDENT]: {
-        login: 'kwame.osei',
-        password: 'Password@123',
-    },
-    [USER_ROLES.PARENT]: {
-        login: 'yaw.osei',
-        password: 'Password@123',
-    },
-};
+// Demo Credentials (local development only).
+// Values are generated into env.js from lms-frontend/.env and are never committed.
+const DEMO_CREDENTIALS = (
+    APP_ENV === 'development' &&
+    _env.DEMO_CREDENTIALS &&
+    typeof _env.DEMO_CREDENTIALS === 'object'
+) ? _env.DEMO_CREDENTIALS : {};
 
 // Export configuration
 if (typeof module !== 'undefined' && module.exports) {

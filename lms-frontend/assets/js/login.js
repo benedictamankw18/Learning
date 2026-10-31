@@ -118,6 +118,15 @@ async function handleLogin(event) {
  * Setup quick login buttons for demo
  */
 function setupQuickLoginButtons() {
+    const quickLogin = document.querySelector('.quick-login');
+    const hasDemoCredentials = DEMO_CREDENTIALS && Object.keys(DEMO_CREDENTIALS).length > 0;
+
+    // Quick login is a development-only convenience. Hide it everywhere else.
+    if (APP_ENV !== 'development' || !hasDemoCredentials) {
+        if (quickLogin) quickLogin.style.display = 'none';
+        return;
+    }
+
     const quickButtons = document.querySelectorAll('.quick-btn');
 
     quickButtons.forEach(button => {

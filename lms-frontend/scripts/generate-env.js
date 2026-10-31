@@ -40,11 +40,24 @@ if (missing.length) {
     process.exit(1);
 }
 
+// Optional: local-only quick-login credentials, stored as a JSON object.
+// Example:
+//   DEMO_CREDENTIALS={"super_admin":{"login":"superadmin","password":"..."}}
+let demoCredentials = null;
+if (vars.DEMO_CREDENTIALS) {
+    try {
+        demoCredentials = JSON.parse(vars.DEMO_CREDENTIALS);
+    } catch (e) {
+        console.warn('WARN: DEMO_CREDENTIALS is not valid JSON; it will be ignored.');
+    }
+}
+
 const content = `// AUTO-GENERATED — do not edit manually.
 // Run: node lms-frontend/scripts/generate-env.js
 window.ENV_CONFIG = {
     APP_ENV:      '${vars.APP_ENV}',
     API_BASE_URL: '${vars.API_BASE_URL}',
+    DEMO_CREDENTIALS: ${demoCredentials ? JSON.stringify(demoCredentials) : 'null'},
 };
 `;
 

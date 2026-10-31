@@ -113,6 +113,7 @@ Paginated endpoints add a `pagination` object with `total`, `per_page`, `current
 Learning/
 ├── docker-compose.yml            # Local full-stack environment
 ├── .env.docker.example           # Database credentials for Docker Compose
+├── .gitignore                    # Keeps secrets, uploads, logs, and generated files out of Git
 ├── db/
 │   └── init/
 │       ├── 01-lms.sql            # Schema (71 tables)
@@ -133,6 +134,7 @@ Learning/
 │   ├── uploads/                  # Uploaded files (served at /uploads/...)
 │   ├── logs/                     # Application logs
 │   ├── vendor/                   # Composer dependencies
+│   ├── .env.example              # Local API configuration template
 │   ├── Dockerfile
 │   └── composer.json
 ├── lms-frontend/
@@ -230,9 +232,21 @@ mysql -u root -p lms < db/init/02-insert.sql
 
 `02-insert.sql` seeds roles, permissions, a platform super admin, and demo institution data. Review it before importing into any shared environment.
 
+> **Do not use the seeded super-admin outside local development.** Its password hash is committed to this repository, so the password must be treated as known. Provision or rotate the account with:
+>
+> ```bash
+> php lms-api/scripts/create_superadmin.php --email=you@example.com
+> ```
+>
+> The script generates a random password and prints it once. Add `--force` to rotate an existing account.
+
 ### 2. Configure and start the API
 
-Create `lms-api/.env`. There is currently no `lms-api/.env.example`; start from `.env.docker.example` and change the local values:
+Create `lms-api/.env` from the template and adjust the local values:
+
+```bash
+cp lms-api/.env.example lms-api/.env
+```
 
 ```dotenv
 DB_HOST=127.0.0.1
@@ -610,13 +624,24 @@ mysqladmin -h 127.0.0.1 -P 3306 -u root -p ping
 
 ## Security Notes
 
-- **Rotate committed secrets.** Environment files are currently tracked in Git. Use the `.example` files as templates, keep real values out of version control, and rotate `JWT_SECRET` and database passwords if they have been shared.
+- **Rotate every secret that was ever committed.** Environment files were previously tracked in this public repository. They are now ignored and untracked, but they remain in Git history until that history is purged. Treat the database passwords, JWT secrets, and SMTP credentials as compromised: revoke SMTP app passwords, rotate the JWT secret, and change database passwords.
+- **Keep secrets out of the frontend.** `lms-frontend` must only receive `APP_ENV`, `API_BASE_URL`, and (optionally) local demo credentials through generated `env.js`. Never place SMTP credentials or other server-side secrets in frontend files.
 - **Set a strong `JWT_SECRET`.** Use at least 32 random characters and never reuse it across environments.
 - **Restrict CORS.** Prefer an explicit `ALLOWED_ORIGINS` list over `*` outside local development.
 - **Serve over HTTPS in production** and set `APP_ENV=production`, `APP_DEBUG=false`.
 - **Validate uploads** on the server (type, size, and destination) in addition to client-side checks.
 - **Back up the database** before running migrations or importing seed data into an existing environment.
 - **Review the seed data** before using it outside local development; it creates known accounts and demo records.
+- **Purge history and force-push only with team coordination.** Rewriting history requires collaborators to re-clone and does not remove copies held by forks, clones, or caches — rotation is still mandatory.
+
+### Secret rotation checklist
+
+1. Revoke the Gmail app passwords used by `MAIL_*` and review the account's recent activity.
+2. Generate a new `JWT_SECRET` (`php -r "echo bin2hex(random_bytes(32));"`); all sessions are invalidated.
+3. Change the MariaDB root and application user passwords; update `.env.docker` / `lms-api/.env`.
+4. Rotate the seeded super-admin: `php lms-api/scripts/create_superadmin.php --email=you@example.com --force`.
+5. Regenerate `assets/js/env.js` and rebuild the frontend image.
+6. Confirm `git ls-files` no longer lists `.env`, uploads, or logs.
 
 ---
 
@@ -625,11 +650,11 @@ mysqladmin -h 127.0.0.1 -P 3306 -u root -p ping
 The application is functional end to end (authentication, role dashboards, academic management, assessments, messaging, and reporting), but the repository has some maintenance gaps:
 
 - No automated tests, linter configuration, or CI workflow.
-- No root `.gitignore`; environment files, `vendor/`, uploads, logs, and `node_modules/` may be tracked.
-- `lms-api` has no `.env.example` (only `.env.docker.example`).
+- Secrets committed before `.gitignore` was added remain in Git history until the history is purged; rotate them regardless.
+- Uploads and logs are no longer tracked, but previously committed copies remain in history.
+- The seed super-admin account uses a fixed password hash and has no forced password change.
 - `lms-frontend/README.md` and `DEVELOPMENT-PLAN.md` predate the current page structure.
 - Database changes are applied through individual migration scripts rather than a tracked migration runner.
-- `lms-frontend/assets/js/config.js` contains a LAN fallback API URL; rely on generated `env.js` instead.
 
 ---
 

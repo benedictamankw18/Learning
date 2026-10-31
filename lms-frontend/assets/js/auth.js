@@ -214,7 +214,9 @@ class AuthService {
             logger.error('AUTH', 'Login error caught', { error: error.message, stack: error.stack });
             
             if (error.message === 'Failed to fetch') {
-                const errorMsg = 'Cannot connect to server. Please ensure the API server is running on http://localhost:8000';
+                const errorMsg = API_BASE_URL
+                    ? `Cannot connect to the server at ${API_BASE_URL}. Please check your connection and try again.`
+                    : 'Cannot connect to the server. API_BASE_URL is not configured.';
                 logger.error('AUTH', errorMsg);
                 throw new Error(errorMsg);
             }

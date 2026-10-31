@@ -25,16 +25,20 @@ class APIService {
 
         addCandidate(primaryBaseURL);
 
-        if (typeof window !== 'undefined' && window.location) {
-            const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
-            const hostName = String(window.location.hostname || '').trim();
-            if (hostName) {
-                addCandidate(`${protocol}//${hostName}:8000`);
+        // Local fallbacks are a development convenience only. In production the
+        // configured API_BASE_URL must be the single source of truth.
+        if (APP_ENV === 'development') {
+            if (typeof window !== 'undefined' && window.location) {
+                const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
+                const hostName = String(window.location.hostname || '').trim();
+                if (hostName) {
+                    addCandidate(`${protocol}//${hostName}:8000`);
+                }
             }
-        }
 
-        addCandidate('http://localhost:8000');
-        addCandidate('http://127.0.0.1:8000');
+            addCandidate('http://localhost:8000');
+            addCandidate('http://127.0.0.1:8000');
+        }
 
         return candidates;
     }
@@ -147,6 +151,13 @@ class APIService {
      * Make HTTP request with timeout
      */
     async request(url, options) {
+        if (this.baseCandidates.length === 0) {
+            throw new Error(
+                'API_BASE_URL is not configured. Set lms-frontend/.env and run ' +
+                'node lms-frontend/scripts/generate-env.js.'
+            );
+        }
+
         let lastNetworkError = null;
 
         for (const baseURL of this.baseCandidates) {
