@@ -45,10 +45,14 @@ if (missing.length) {
 //   DEMO_CREDENTIALS={"super_admin":{"login":"superadmin","password":"..."}}
 let demoCredentials = null;
 if (vars.DEMO_CREDENTIALS) {
-    try {
-        demoCredentials = JSON.parse(vars.DEMO_CREDENTIALS);
-    } catch (e) {
-        console.warn('WARN: DEMO_CREDENTIALS is not valid JSON; it will be ignored.');
+    if (vars.APP_ENV !== 'development') {
+        console.warn('WARN: DEMO_CREDENTIALS is only allowed when APP_ENV=development; ignoring it.');
+    } else {
+        try {
+            demoCredentials = JSON.parse(vars.DEMO_CREDENTIALS);
+        } catch (e) {
+            console.warn('WARN: DEMO_CREDENTIALS is not valid JSON; it will be ignored.');
+        }
     }
 }
 

@@ -36,7 +36,7 @@ class JWTHandler
         return JWT::encode($token, $config['secret'], $config['algorithm']);
     }
 
-    public static function generateRefreshToken(int $userId): string
+    public static function generateRefreshToken(int $userId, string $jti): string
     {
         $config = self::getConfig();
 
@@ -49,10 +49,44 @@ class JWTHandler
             'iat' => $issuedAt,
             'exp' => $expire,
             'type' => 'refresh',
+            'jti' => $jti,
             'user_id' => $userId
         ];
 
         return JWT::encode($token, $config['secret'], $config['algorithm']);
+    }
+
+    public static function generateJti(): string
+    {
+        return bin2hex(random_bytes(32));
+    }
+
+    public static function getRefreshExpiry(): int
+    {
+        return (int) self::getConfig()['refresh_expiry'];
+    }
+
+    public static function hashToken(string $token): string
+    {
+        return hash('sha256', $token);
+    }
+
+    /**
+     * Validate a refresh token and require the refresh-specific claims.
+     */
+    public static function validateRefreshToken(string $token): ?object
+    {
+        $payload = self::validateToken($token);
+
+        if (!$payload) {
+            return null;
+        }
+
+        if (($payload->type ?? null) !== 'refresh' || empty($payload->jti) || empty($payload->user_id)) {
+            return null;
+        }
+
+        return $payload;
     }
 
     public static function validateToken(string $token): ?object

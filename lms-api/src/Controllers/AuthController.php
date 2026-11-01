@@ -6,111 +6,35 @@ use App\Utils\Response;
 use App\Utils\Validator;
 use App\Utils\JWTHandler;
 use App\Repositories\UserRepository;
-use App\Repositories\StudentRepository;
-use App\Repositories\TeacherRepository;
 use App\Repositories\LoginActivityRepository;
+use App\Repositories\RefreshTokenRepository;
 use App\Services\EmailService;
 use App\Config\Database;
 
 class AuthController
 {
     private UserRepository $userRepo;
-    private StudentRepository $studentRepo;
-    private TeacherRepository $teacherRepo;
     private LoginActivityRepository $loginActivityRepo;
+    private RefreshTokenRepository $refreshTokenRepo;
     private JWTHandler $jwtHandler;
     private EmailService $emailService;
 
     public function __construct()
     {
         $this->userRepo = new UserRepository();
-        $this->studentRepo = new StudentRepository();
-        $this->teacherRepo = new TeacherRepository();
         $this->loginActivityRepo = new LoginActivityRepository();
+        $this->refreshTokenRepo = new RefreshTokenRepository();
         $this->jwtHandler = new JWTHandler();
         $this->emailService = new EmailService();
     }
 
     public function register(): void
     {
-        $rawInput = file_get_contents('php://input');
-        $data = json_decode($rawInput, true);
-
-        if (!is_array($data)) {
-            $data = [];
-        }
-
-        $validator = new Validator($data);
-        $validator->required(['username', 'email', 'password', 'first_name', 'last_name', 'institution_id'])
-            ->email('email')
-            ->min('password', 8)
-            ->min('username', 3);
-
-        if ($validator->fails()) {
-            Response::validationError($validator->getErrors());
-            return;
-        }
-
-        // Check if email exists
-        if ($this->userRepo->findByEmail($data['email'])) {
-            Response::error('Email already exists', 409);
-            return;
-        }
-
-        // Check if username exists
-        if ($this->userRepo->findByUsername($data['username'])) {
-            Response::error('Username already exists', 409);
-            return;
-        }
-
-        // Determine role (default to student)
-        $roleType = strtolower($data['role_type'] ?? 'student');
-        $role = $this->userRepo->getRoleByName($roleType);
-
-        if (!$role) {
-            Response::error('Invalid role type. Must be: admin, teacher, student, or parent', 400);
-            return;
-        }
-
-        // Create user
-        $userId = $this->userRepo->create($data);
-
-        if (!$userId) {
-            Response::serverError('Failed to create user');
-            return;
-        }
-
-        // Assign role
-        $this->userRepo->assignRole($userId, $role['role_id']);
-
-        // Create student or teacher record
-        if ($roleType === 'student') {
-            $studentIdNumber = 'STU-' . date('Y') . str_pad($userId, 5, '0', STR_PAD_LEFT);
-            $this->studentRepo->create($userId, [
-                'institution_id' => $data['institution_id'],
-                'student_id_number' => $studentIdNumber,
-                'enrollment_date' => date('Y-m-d'),
-                'class_id' => $data['class_id'] ?? null,
-                'gender' => $data['gender'] ?? null,
-                'date_of_birth' => $data['date_of_birth'] ?? null
-            ]);
-        } elseif ($roleType === 'teacher') {
-            $employeeId = 'EMP-' . date('Y') . str_pad($userId, 5, '0', STR_PAD_LEFT);
-            $this->teacherRepo->create($userId, [
-                'institution_id' => $data['institution_id'],
-                'employee_id' => $employeeId,
-                'department' => $data['department'] ?? null,
-                'specialization' => $data['specialization'] ?? null,
-                'hire_date' => date('Y-m-d')
-            ]);
-        }
-
-        $user = $this->userRepo->findById($userId);
-
-        Response::success([
-            'user' => $user,
-            'message' => 'Registration successful'
-        ], 201);
+        // Public self-registration is disabled. It previously accepted a
+        // caller-supplied role_type and passed the raw request body to
+        // UserRepository::create(), which also honoured is_super_admin.
+        // Administrators create users through the authenticated /users routes.
+        Response::forbidden('Public registration is disabled. Please contact your institution administrator.');
     }
 
     public function login(): void
@@ -169,7 +93,22 @@ class AuthController
             'email' => $user['email'],
             'username' => $user['username']
         ]);
-        $refreshToken = $this->jwtHandler->generateRefreshToken($user['user_id']);
+        $refreshJti = JWTHandler::generateJti();
+        $refreshToken = $this->jwtHandler->generateRefreshToken($user['user_id'], $refreshJti);
+
+        $stored = $this->refreshTokenRepo->create(
+            (int) $user['user_id'],
+            $refreshToken,
+            $refreshJti,
+            time() + JWTHandler::getRefreshExpiry(),
+            $_SERVER['HTTP_USER_AGENT'] ?? null,
+            $_SERVER['REMOTE_ADDR'] ?? null
+        );
+
+        if (!$stored) {
+            Response::serverError('Failed to create session');
+            return;
+        }
 
         // Log successful login activity
         $this->loginActivityRepo->create([
@@ -220,6 +159,19 @@ class AuthController
 
     public function logout(): void
     {
+        $rawInput = file_get_contents('php://input');
+        $data = json_decode($rawInput, true);
+
+        if (!is_array($data)) {
+            $data = [];
+        }
+
+        // Revoke the refresh token supplied by the client. The access token is
+        // short-lived and is discarded by the frontend after this call.
+        if (!empty($data['refresh_token']) && is_string($data['refresh_token'])) {
+            $this->refreshTokenRepo->revokeByToken($data['refresh_token']);
+        }
+
         // Best-effort: parse the Bearer token to log activity.
         // We do NOT require a valid (non-expired) token — the frontend may call
         // this with an already-expired token, and that is fine.
@@ -253,22 +205,54 @@ class AuthController
             $data = [];
         }
 
-        if (!isset($data['refresh_token'])) {
+        if (!isset($data['refresh_token']) || !is_string($data['refresh_token']) || $data['refresh_token'] === '') {
             Response::error('Refresh token required', 400);
             return;
         }
 
-        $payload = $this->jwtHandler->validateToken($data['refresh_token']);
+        $refreshToken = $data['refresh_token'];
+        $payload = $this->jwtHandler->validateRefreshToken($refreshToken);
 
         if (!$payload) {
             Response::unauthorized('Invalid refresh token');
             return;
         }
 
-        $user = $this->userRepo->findById($payload->user_id);
+        $jti = (string) $payload->jti;
+        $stored = $this->refreshTokenRepo->findByJti($jti);
+
+        if (
+            !$stored ||
+            (int) $stored['user_id'] !== (int) $payload->user_id ||
+            $stored['revoked_at'] !== null ||
+            strtotime((string) $stored['expires_at']) <= time() ||
+            !hash_equals((string) $stored['token_hash'], JWTHandler::hashToken($refreshToken))
+        ) {
+            Response::unauthorized('Invalid or expired refresh token');
+            return;
+        }
+
+        $user = $this->userRepo->findById((int) $payload->user_id);
 
         if (!$user || !$user['is_active']) {
             Response::unauthorized('User not found or inactive');
+            return;
+        }
+
+        $newJti = JWTHandler::generateJti();
+        $newRefreshToken = $this->jwtHandler->generateRefreshToken((int) $user['user_id'], $newJti);
+
+        $rotated = $this->refreshTokenRepo->rotate(
+            (int) $stored['id'],
+            $newRefreshToken,
+            $newJti,
+            time() + JWTHandler::getRefreshExpiry(),
+            $_SERVER['HTTP_USER_AGENT'] ?? null,
+            $_SERVER['REMOTE_ADDR'] ?? null
+        );
+
+        if (!$rotated) {
+            Response::unauthorized('Refresh token has already been used');
             return;
         }
 
@@ -280,6 +264,7 @@ class AuthController
 
         Response::success([
             'access_token' => $accessToken,
+            'refresh_token' => $newRefreshToken,
             'token_type' => 'Bearer'
         ]);
     }
@@ -372,6 +357,9 @@ class AuthController
             // Mark token as used
             $this->userRepo->markTokenAsUsed($data['token']);
 
+            // Invalidate every existing refresh token for this account.
+            $this->refreshTokenRepo->revokeAllForUser((int) $tokenData['user_id']);
+
             // Log password reset
             $this->userRepo->logActivity($tokenData['user_id'], 'password_reset_completed', [
                 'ip' => $_SERVER['REMOTE_ADDR'] ?? ''
@@ -418,6 +406,9 @@ class AuthController
         }
 
         if ($this->userRepo->updatePassword($user['user_id'], $data['new_password'])) {
+            // A password change must invalidate sessions on other devices.
+            $this->refreshTokenRepo->revokeAllForUser((int) $user['user_id']);
+
             $userName = trim(((string) ($user['first_name'] ?? '')) . ' ' . ((string) ($user['last_name'] ?? '')));
             if ($userName === '') {
                 $userName = (string) ($user['username'] ?? 'User');

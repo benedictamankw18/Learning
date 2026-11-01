@@ -233,7 +233,7 @@ class AuthService {
         try {
             // Call logout API (optional - even if it fails, clear local data)
             if (this.isAuthenticated()) {
-                await AuthAPI.logout().catch(() => {
+                await AuthAPI.logout(this.getRefreshToken()).catch(() => {
                     // Ignore logout API errors
                 });
             }

@@ -30,7 +30,6 @@ class Database
             ];
 
             $this->connection = new PDO($dsn, $user, $pass, $options);
-            $this->runMigrations();
         } catch (PDOException $e) {
             error_log("Database Connection Error: " . $e->getMessage());
             throw new Exception("Database connection failed");
@@ -40,56 +39,6 @@ class Database
     /**
      * Safe, idempotent schema additions (run once per connection, silently ignored if already applied).
      */
-    private function runMigrations(): void
-    {
-        // Add profile photo URL storage to users table if it doesn't exist (MySQL compatible)
-        try {
-            $stmt = $this->connection->prepare("
-                SELECT COUNT(*) FROM information_schema.COLUMNS 
-                WHERE TABLE_SCHEMA = DATABASE() 
-                AND TABLE_NAME = 'users' 
-                AND COLUMN_NAME = 'profile_photo'
-            ");
-            $stmt->execute();
-            $exists = (int)$stmt->fetchColumn() > 0;
-            if (!$exists) {
-                $this->connection->exec("ALTER TABLE users ADD COLUMN profile_photo VARCHAR(500) DEFAULT NULL");
-            }
-        } catch (PDOException $e) {
-            error_log("Migration skipped: " . $e->getMessage());
-        }
-
-        // Drop any recursive trigger on admin_activity (error 1442 fix)
-        $dropTriggers = [
-            "DROP TRIGGER IF EXISTS after_admin_activity_insert",
-            "DROP TRIGGER IF EXISTS before_admin_activity_insert",
-            "DROP TRIGGER IF EXISTS after_admin_activity_update",
-            "DROP TRIGGER IF EXISTS before_admin_activity_update",
-        ];
-        foreach ($dropTriggers as $sql) {
-            try {
-                $this->connection->exec($sql);
-            } catch (PDOException $e) {
-                error_log("Migration skipped: " . $e->getMessage());
-            }
-        }
-
-        // Drop ALL triggers on admin_activity dynamically (error 1442: recursive trigger)
-        try {
-            $stmt = $this->connection->query(
-                "SELECT TRIGGER_NAME FROM information_schema.TRIGGERS
-                 WHERE EVENT_OBJECT_TABLE = 'admin_activity'
-                   AND TRIGGER_SCHEMA = DATABASE()"
-            );
-            foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) as $triggerName) {
-                $this->connection->exec("DROP TRIGGER IF EXISTS `" . str_replace('`', '', $triggerName) . "`");
-                error_log("Dropped recursive trigger on admin_activity: {$triggerName}");
-            }
-        } catch (PDOException $e) {
-            error_log("Trigger cleanup skipped: " . $e->getMessage());
-        }
-    }
-
     public static function getInstance(): Database
     {
         if (self::$instance === null) {

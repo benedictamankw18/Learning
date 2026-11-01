@@ -305,8 +305,14 @@ const API = new APIService();
  */
 const AuthAPI = {
     login: (credentials) => API.post(API_ENDPOINTS.AUTH_LOGIN, credentials),
-    logout: () => API.post(API_ENDPOINTS.AUTH_LOGOUT),
-    refresh: () => API.post(API_ENDPOINTS.AUTH_REFRESH),
+    logout: (refreshToken) => API.post(
+        API_ENDPOINTS.AUTH_LOGOUT,
+        refreshToken ? { refresh_token: refreshToken } : undefined
+    ),
+    refresh: (refreshToken) => API.post(
+        API_ENDPOINTS.AUTH_REFRESH,
+        refreshToken ? { refresh_token: refreshToken } : undefined
+    ),
     me: () => API.get(API_ENDPOINTS.AUTH_ME),
 };
 

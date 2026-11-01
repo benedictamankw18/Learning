@@ -122,6 +122,14 @@ class AuthMiddleware
 
     private function logActivity(int $userId): void
     {
+        $method = strtoupper((string) ($_SERVER['REQUEST_METHOD'] ?? ''));
+
+        // Read-only requests are frequent and were producing one audit row per
+        // API call. Keep the audit trail focused on state-changing requests.
+        if (in_array($method, ['GET', 'HEAD', 'OPTIONS'], true)) {
+            return;
+        }
+
         try {
             $stmt = $this->db->prepare("
                 INSERT INTO user_activity (user_id, activity_type, activity_details, ip_address)

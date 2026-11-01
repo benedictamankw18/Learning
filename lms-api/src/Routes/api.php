@@ -2,7 +2,9 @@
 
 return [
     // Auth routes (Public)
-    'POST /auth/register' => ['controller' => 'AuthController', 'method' => 'register', 'auth' => false],
+    // Public self-registration is intentionally disabled. Students are created
+    // by an administrator (or a future invite-based flow) so callers cannot
+    // choose their own role or super-admin flag.
     'POST /auth/login' => ['controller' => 'AuthController', 'method' => 'login', 'auth' => false],
     'POST /auth/refresh' => ['controller' => 'AuthController', 'method' => 'refresh', 'auth' => false],
     'POST /auth/forgot-password' => ['controller' => 'AuthController', 'method' => 'forgotPassword', 'auth' => false],
