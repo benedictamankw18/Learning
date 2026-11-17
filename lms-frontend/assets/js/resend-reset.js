@@ -112,7 +112,7 @@ async function handleResendReset(e) {
             lastRequestTime = Date.now();
             
             showAlert(
-                data.message || 'A new password reset link has been sent to your email. Please check your inbox and spam folder.',
+                data.message || 'A new password reset link has been sent to your email. Please check your inbox and spam/junk folder.',
                 'success'
             );
             

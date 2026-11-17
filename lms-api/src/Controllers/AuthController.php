@@ -323,7 +323,8 @@ class AuthController
 
         // Always return success for security (don't reveal if email exists)
         Response::success([
-            'message' => 'If your email exists in our system, you will receive a password reset link shortly'
+            'message' => 'If your email exists in our system, you will receive a password reset link shortly. '
+                . 'If you do not see it within a few minutes, check your spam or junk folder.'
         ]);
     }
 

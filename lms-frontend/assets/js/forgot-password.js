@@ -84,7 +84,7 @@ async function handleForgotPassword(e) {
 
         if (response.ok) {
             showAlert(
-                data.message || 'Password reset link has been sent to your email. Please check your inbox.',
+                data.message || 'Password reset link has been sent to your email. Please check your inbox and spam/junk folder.',
                 'success'
             );
             

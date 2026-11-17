@@ -184,6 +184,7 @@ class EmailService
             . "$resetLink\n\n"
             . "This link will expire in 1 hour.\n\n"
             . "If you didn't request this, please ignore this email.\n\n"
+            . "If you don't see this email in your inbox, check your spam or junk folder.\n\n"
             . "Best regards,\nLMS Team";
 
         return $this->send($to, $subject, $body, $name, $altBody);
@@ -206,6 +207,7 @@ class EmailService
             . ($changedBy ? "Changed by: {$changedBy}\n" : '')
             . "You can sign in here: {$loginLink}\n\n"
             . "If you did not expect this change, contact your administrator immediately.\n\n"
+            . "If you don't see this email in your inbox, check your spam or junk folder.\n\n"
             . "Best regards,\nGhana Education Service - LMS Team";
 
         return $this->send($to, $subject, $body, $name, $altBody);
@@ -229,6 +231,7 @@ class EmailService
             . "Temporary Password: $tempPassword\n\n"
             . "Please login and change your password:\n"
             . "$loginLink\n\n"
+            . "If you don't see this email in your inbox, check your spam or junk folder.\n\n"
             . "Best regards,\nLMS Team";
 
         return $this->send($to, $subject, $body, $name, $altBody);
@@ -287,7 +290,9 @@ class EmailService
             </div>
             
             <p>If you didn't request a password reset, please ignore this email. Your password will remain unchanged.</p>
-            
+
+            <p style="font-size: 13px; color: #666;">Tip: If you don't see this email in your inbox, check your spam or junk folder.</p>
+
             <p>Best regards,<br><strong>Ghana Education Service - LMS Team</strong></p>
         </div>
         <div class="ges-footer">
@@ -369,6 +374,8 @@ HTML;
                 If you did not reset your password, contact your administrator immediately so they can help secure your account.
             </div>
 
+            <p style="font-size: 13px; color: #666;">Tip: If you don't see this email in your inbox, check your spam or junk folder.</p>
+
             <p>Best regards,<br><strong>Ghana Education Service - LMS Team</strong></p>
         </div>
         <div class="ges-footer">
@@ -441,7 +448,9 @@ HTML;
             <a href="{$loginLink}" class="button">Login Now</a>
             
             <p style="margin-top: 30px;">If you have any questions or need assistance, please contact the system administrator.</p>
-            
+
+            <p style="font-size: 13px; color: #666;">Tip: If you don't see this email in your inbox, check your spam or junk folder.</p>
+
             <p>Best regards,<br><strong>Ghana Education Service - LMS Team</strong></p>
         </div>
         <div class="ges-footer">
@@ -482,6 +491,7 @@ HTML;
             . (empty($changedFields) ? "Your account details were refreshed.\n" : "What changed: {$fieldList}\n")
             . "\nSign in to see the latest changes: {$loginLink}\n\n"
             . "If this wasn't you, please contact your administrator right away.\n\n"
+            . "If you don't see this email in your inbox, check your spam or junk folder.\n\n"
             . "Warm regards,\nGhana Education Service — LMS Team";
 
         return $this->send($to, $subject, $body, $name, $altBody);
@@ -599,6 +609,10 @@ HTML;
         If you weren't aware of these changes, please reach out to your school administrator straight away
         so they can look into it.
       </div>
+
+      <p style="margin:18px 0 0;font-size:12px;color:#999;">
+        Tip: If you don't see this email in your inbox, check your spam or junk folder.
+      </p>
     </div>
 
     <!-- GES Footer -->

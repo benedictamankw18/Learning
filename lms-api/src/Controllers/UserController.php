@@ -79,6 +79,7 @@ class UserController
                 <p><strong>Username:</strong> {$username}<br><strong>Email:</strong> {$email}</p>
                 <p>You can sign in here: <a href=\"{$loginUrl}\">{$loginUrl}</a></p>
                 <p>Created by: {$actorName}</p>
+                <p style=\"font-size: 13px; color: #666;\">Tip: If you don't see this email in your inbox, check your spam or junk folder.</p>
                 <p>Regards,<br>LMS Team</p>
             ";
 
@@ -88,6 +89,7 @@ class UserController
                 . "Email: {$email}\n"
                 . "Sign in: {$loginUrl}\n"
                 . "Created by: {$actorName}\n\n"
+                . "If you don't see this email in your inbox, check your spam or junk folder.\n\n"
                 . "Regards,\nLMS Team";
 
             $emailService->send($email, $subject, $body, $recipientName, $altBody);
