@@ -4,6 +4,7 @@ namespace App\Controllers;
 
 use App\Repositories\SubscriptionRepository;
 use App\Utils\Response;
+use App\Security\AccessControl;
 
 class SubscriptionController
 {
@@ -20,6 +21,11 @@ class SubscriptionController
      */
     public function index(array $user): void
     {
+        if (!\App\Security\AccessControl::isSuperAdmin($user)) {
+            \App\Utils\Response::forbidden('Super admin access required');
+            return;
+        }
+
         try {
             $institutionId = $_GET['institution_id'] ?? null;
             $status = $_GET['status'] ?? null;
@@ -56,6 +62,11 @@ class SubscriptionController
      */
     public function show(array $user, int $id): void
     {
+        if (!\App\Security\AccessControl::isSuperAdmin($user)) {
+            \App\Utils\Response::forbidden('Super admin access required');
+            return;
+        }
+
         try {
             $subscription = $this->subscriptionRepository->findById($id);
 
@@ -76,6 +87,11 @@ class SubscriptionController
      */
     public function create(array $user): void
     {
+        if (!\App\Security\AccessControl::isSuperAdmin($user)) {
+            \App\Utils\Response::forbidden('Super admin access required');
+            return;
+        }
+
         try {
             $data = $_POST;
 
@@ -107,6 +123,11 @@ class SubscriptionController
      */
     public function update(array $user, int $id): void
     {
+        if (!\App\Security\AccessControl::isSuperAdmin($user)) {
+            \App\Utils\Response::forbidden('Super admin access required');
+            return;
+        }
+
         try {
             $data = $_POST;
 
@@ -130,6 +151,11 @@ class SubscriptionController
      */
     public function cancel(array $user, int $id): void
     {
+        if (!\App\Security\AccessControl::isSuperAdmin($user)) {
+            \App\Utils\Response::forbidden('Super admin access required');
+            return;
+        }
+
         try {
             $subscription = $this->subscriptionRepository->findById($id);
             if (!$subscription) {
@@ -151,6 +177,11 @@ class SubscriptionController
      */
     public function renew(array $user, int $id): void
     {
+        if (!\App\Security\AccessControl::isSuperAdmin($user)) {
+            \App\Utils\Response::forbidden('Super admin access required');
+            return;
+        }
+
         try {
             $data = $_POST;
 
@@ -194,6 +225,11 @@ class SubscriptionController
      */
     public function getActiveSubscription(array $user, int $institutionId): void
     {
+        if (!\App\Security\AccessControl::isSuperAdmin($user)) {
+            \App\Utils\Response::forbidden('Super admin access required');
+            return;
+        }
+
         try {
             $subscription = $this->subscriptionRepository->getActiveByInstitution($institutionId);
 
@@ -214,6 +250,11 @@ class SubscriptionController
      */
     public function getStatistics(array $user): void
     {
+        if (!\App\Security\AccessControl::isSuperAdmin($user)) {
+            \App\Utils\Response::forbidden('Super admin access required');
+            return;
+        }
+
         try {
             $stats = $this->subscriptionRepository->getStatistics();
 
@@ -229,6 +270,11 @@ class SubscriptionController
      */
     public function checkStatus(array $user, int $institutionId): void
     {
+        if (!\App\Security\AccessControl::isSuperAdmin($user)) {
+            \App\Utils\Response::forbidden('Super admin access required');
+            return;
+        }
+
         try {
             $status = $this->subscriptionRepository->checkStatus($institutionId);
 

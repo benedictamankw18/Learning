@@ -142,7 +142,7 @@ class CourseRepository
         }
     }
 
-    public function getAll(int $page = 1, int $limit = 20, ?int $teacherId = null, ?string $status = null): array
+    public function getAll(int $page = 1, int $limit = 20, ?int $teacherId = null, ?string $status = null, ?int $institutionId = null): array
     {
         try {
             $offset = ($page - 1) * $limit;
@@ -184,6 +184,11 @@ class CourseRepository
                 $params['status'] = $status;
             }
 
+            if ($institutionId) {
+                $sql .= " AND cs.institution_id = :institution_id";
+                $params['institution_id'] = $institutionId;
+            }
+
             $sql .= " GROUP BY cs.course_id ORDER BY cs.created_at DESC LIMIT :limit OFFSET :offset";
 
             $stmt = $this->db->prepare($sql);
@@ -203,7 +208,7 @@ class CourseRepository
         }
     }
 
-    public function count(?int $teacherId = null, ?string $status = null): int
+    public function count(?int $teacherId = null, ?string $status = null, ?int $institutionId = null): int
     {
         try {
             $sql = "SELECT COUNT(*) FROM class_subjects WHERE 1=1";
@@ -217,6 +222,11 @@ class CourseRepository
             if ($status) {
                 $sql .= " AND status = :status";
                 $params['status'] = $status;
+            }
+
+            if ($institutionId) {
+                $sql .= " AND institution_id = :institution_id";
+                $params['institution_id'] = $institutionId;
             }
 
             $stmt = $this->db->prepare($sql);

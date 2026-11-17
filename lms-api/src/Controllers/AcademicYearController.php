@@ -7,6 +7,7 @@ use App\Utils\Validator;
 use App\Repositories\AcademicYearRepository;
 use App\Repositories\NotificationRepository;
 use App\Middleware\RoleMiddleware;
+use App\Security\AccessControl;
 
 class AcademicYearController
 {
@@ -61,7 +62,7 @@ class AcademicYearController
     {
         $page = isset($_GET['page']) ? (int) $_GET['page'] : 1;
         $limit = isset($_GET['limit']) ? (int) $_GET['limit'] : 20;
-        $institutionId = ($user['role'] ?? '') !== 'super_admin' ? (int) ($user['institution_id'] ?? 0) : null;
+        $institutionId = AccessControl::isSuperAdmin($user) ? null : AccessControl::institutionId($user);
 
         $years = $this->repo->getAll($page, $limit, $institutionId);
         $total = $this->repo->count($institutionId);
@@ -79,7 +80,7 @@ class AcademicYearController
 
     public function show(array $user, int $id): void
     {
-        $institutionId = ($user['role'] ?? '') !== 'super_admin' ? (int) ($user['institution_id'] ?? 0) : null;
+        $institutionId = AccessControl::isSuperAdmin($user) ? null : AccessControl::institutionId($user);
         $year = $this->repo->findById($id, $institutionId);
 
         if (!$year) {
@@ -102,6 +103,10 @@ class AcademicYearController
         if (!is_array($data)) {
             Response::error('Invalid JSON payload', 400);
             return;
+        }
+
+        if (!AccessControl::isSuperAdmin($user)) {
+            unset($data['institution_id']);
         }
 
         $validator = new Validator($data);
@@ -162,7 +167,7 @@ class AcademicYearController
             return;
         }
 
-        $institutionId = ($user['role'] ?? '') !== 'super_admin' ? (int) ($user['institution_id'] ?? 0) : null;
+        $institutionId = AccessControl::isSuperAdmin($user) ? null : AccessControl::institutionId($user);
         $year = $this->repo->findById($id, $institutionId);
 
         if (!$year) {
@@ -174,6 +179,10 @@ class AcademicYearController
         if (!is_array($data)) {
             Response::error('Invalid JSON payload', 400);
             return;
+        }
+
+        if (!AccessControl::isSuperAdmin($user)) {
+            unset($data['institution_id']);
         }
 
         if (array_key_exists('is_current', $data)) {
@@ -246,7 +255,7 @@ class AcademicYearController
             return;
         }
 
-        $institutionId = ($user['role'] ?? '') !== 'super_admin' ? (int) ($user['institution_id'] ?? 0) : null;
+        $institutionId = AccessControl::isSuperAdmin($user) ? null : AccessControl::institutionId($user);
         $year = $this->repo->findById($id, $institutionId);
 
         if (!$year) {
@@ -268,7 +277,7 @@ class AcademicYearController
 
     public function getCurrent(array $user): void
     {
-        $institutionId = ($user['role'] ?? '') !== 'super_admin' ? (int) ($user['institution_id'] ?? 0) : null;
+        $institutionId = AccessControl::isSuperAdmin($user) ? null : AccessControl::institutionId($user);
         $year = $this->repo->getCurrent($institutionId);
 
         if (!$year) {

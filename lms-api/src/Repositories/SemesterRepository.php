@@ -13,7 +13,7 @@ class SemesterRepository
         $this->db = Database::getInstance()->getConnection();
     }
 
-    public function getAll(int $page = 1, int $limit = 20, ?int $academicYearId = null): array
+    public function getAll(int $page = 1, int $limit = 20, ?int $academicYearId = null, ?int $institutionId = null): array
     {
         try {
             $offset = ($page - 1) * $limit;
@@ -21,10 +21,17 @@ class SemesterRepository
                 SELECT s.*, ay.year_name
                 FROM semesters s
                 LEFT JOIN academic_years ay ON s.academic_year_id = ay.academic_year_id
+                WHERE 1=1
             ";
 
+            $params = [];
             if ($academicYearId) {
-                $sql .= " WHERE s.academic_year_id = :academic_year_id";
+                $sql .= " AND s.academic_year_id = :academic_year_id";
+                $params[':academic_year_id'] = $academicYearId;
+            }
+            if ($institutionId) {
+                $sql .= " AND s.institution_id = :institution_id";
+                $params[':institution_id'] = $institutionId;
             }
 
             $sql .= " ORDER BY s.start_date DESC LIMIT :limit OFFSET :offset";
@@ -36,6 +43,9 @@ class SemesterRepository
             if ($academicYearId) {
                 $stmt->bindValue(':academic_year_id', $academicYearId, \PDO::PARAM_INT);
             }
+            if ($institutionId) {
+                $stmt->bindValue(':institution_id', $institutionId, \PDO::PARAM_INT);
+            }
 
             $stmt->execute();
             return $stmt->fetchAll(\PDO::FETCH_ASSOC);
@@ -45,17 +55,23 @@ class SemesterRepository
         }
     }
 
-    public function count(?int $academicYearId = null): int
+    public function count(?int $academicYearId = null, ?int $institutionId = null): int
     {
         try {
-            $sql = "SELECT COUNT(*) as total FROM semesters";
+            $sql = "SELECT COUNT(*) as total FROM semesters WHERE 1=1";
+            $params = [];
             if ($academicYearId) {
-                $sql .= " WHERE academic_year_id = :academic_year_id";
+                $sql .= " AND academic_year_id = :academic_year_id";
+                $params[':academic_year_id'] = $academicYearId;
+            }
+            if ($institutionId) {
+                $sql .= " AND institution_id = :institution_id";
+                $params[':institution_id'] = $institutionId;
             }
 
             $stmt = $this->db->prepare($sql);
-            if ($academicYearId) {
-                $stmt->bindValue(':academic_year_id', $academicYearId, \PDO::PARAM_INT);
+            foreach ($params as $key => $value) {
+                $stmt->bindValue($key, $value, \PDO::PARAM_INT);
             }
 
             $stmt->execute();

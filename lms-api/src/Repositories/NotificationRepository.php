@@ -143,6 +143,7 @@ class NotificationRepository
             SELECT 
                 n.notification_id,
                 n.uuid,
+                n.institution_id,
                 n.title,
                 n.message,
                 n.target_role,

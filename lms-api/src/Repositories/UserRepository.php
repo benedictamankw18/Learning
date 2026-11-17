@@ -369,7 +369,13 @@ class UserRepository
         }
     }
 
-    public function create(array $data): ?int
+    /**
+     * Create a user.
+     *
+     * @param bool $allowSuperAdmin Only pass true after the caller has verified
+     *                              that the actor may create a super admin.
+     */
+    public function create(array $data, bool $allowSuperAdmin = false): ?int
     {
         try {
             // Auto-generate UUID if not provided
@@ -401,7 +407,7 @@ class UserRepository
                 'phone_number' => $data['phone_number'] ?? $data['phone'] ?? null,
                 'address' => $data['address'] ?? null,
                 'dob' => $data['date_of_birth'] ?? null,
-                'is_super_admin' => $data['is_super_admin'] ?? 0,
+                'is_super_admin' => $allowSuperAdmin ? ($data['is_super_admin'] ?? 0) : 0,
                 'is_active' => $data['is_active'] ?? 1
             ]);
 
@@ -644,13 +650,31 @@ class UserRepository
         }
     }
 
-    public function update(int $id, array $data): bool
+    /**
+     * Update a user and, when applicable, their role-specific profile row.
+     *
+     * @param bool $allowPrivilegedFields Only pass true for an authorised
+     *                                    super-admin operation. This permits
+     *                                    is_super_admin and institution_id.
+     */
+    public function update(int $id, array $data, bool $allowPrivilegedFields = false): bool
     {
         try {
             // Normalize column names
             if (isset($data['phone']) && !isset($data['phone_number'])) {
                 $data['phone_number'] = $data['phone'];
                 unset($data['phone']);
+            }
+
+            $allowedUserFields = [
+                'username', 'email', 'first_name', 'last_name', 'phone_number',
+                'address', 'city', 'region', 'date_of_birth', 'title', 'gender',
+                'profile_photo', 'is_active',
+            ];
+
+            if ($allowPrivilegedFields) {
+                $allowedUserFields[] = 'is_super_admin';
+                $allowedUserFields[] = 'institution_id';
             }
 
             // Separate role-specific fields from users table fields.
@@ -671,6 +695,18 @@ class UserRepository
             $parentData  = [];
             $userData    = [];
             foreach ($data as $key => $value) {
+                // Column names are interpolated into SQL below, so reject any
+                // key that is not an explicit allowlist entry.
+                if (!preg_match('/^[a-z][a-z0-9_]*$/', (string) $key)) {
+                    error_log('User update ignored invalid field name: ' . (string) $key);
+                    continue;
+                }
+
+                if (!in_array($key, $allowedUserFields, true) && !in_array($key, $roleOnlyFields, true)) {
+                    error_log('User update ignored disallowed field: ' . (string) $key);
+                    continue;
+                }
+
                 if (in_array($key, $roleOnlyFields)) {
                     if (in_array($key, $adminTableFields))   $adminData[$key]   = $value;
                     if (in_array($key, $teacherTableFields)) $teacherData[$key] = $value;

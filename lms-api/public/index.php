@@ -14,12 +14,39 @@ if (file_exists(__DIR__ . '/../.env')) {
     $dotenv->safeLoad();
 }
 
+$appEnv = $_ENV['APP_ENV'] ?? $_SERVER['APP_ENV'] ?? getenv('APP_ENV') ?: 'production';
+$isDevelopment = $appEnv === 'development';
+
+// Fail closed if JWT configuration is missing or unsafe before any routing.
+try {
+    require __DIR__ . '/../config/jwt.php';
+} catch (\Throwable $exception) {
+    error_log('JWT configuration error: ' . $exception->getMessage());
+
+    http_response_code(500);
+    header('Content-Type: application/json');
+
+    if ($isDevelopment) {
+        echo json_encode([
+            'success' => false,
+            'message' => 'JWT configuration error: ' . $exception->getMessage(),
+        ]);
+    } else {
+        echo json_encode([
+            'success' => false,
+            'message' => 'Internal server error',
+        ]);
+    }
+
+    exit;
+}
+
 // Load CORS configuration
 require_once __DIR__ . '/../config/cors.php';
 
 // Error handling
 error_reporting(E_ALL);
-ini_set('display_errors', $_ENV['APP_ENV'] === 'development' ? '1' : '0');
+ini_set('display_errors', $isDevelopment ? '1' : '0');
 
 // Set JSON content type
 header('Content-Type: application/json');

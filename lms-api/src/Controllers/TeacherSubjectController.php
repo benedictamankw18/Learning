@@ -9,6 +9,7 @@ use App\Repositories\TeacherRepository;
 use App\Repositories\SubjectRepository;
 use App\Repositories\NotificationRepository;
 use App\Middleware\RoleMiddleware;
+use App\Security\AccessControl;
 
 class TeacherSubjectController
 {
@@ -37,6 +38,12 @@ class TeacherSubjectController
             return;
         }
 
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $teacher['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Teacher not found');
+            return;
+        }
+
         $subjects = $this->teacherSubjectRepo->getTeacherSubjects((int)$teacher['teacher_id']);
         Response::success($subjects);
     }
@@ -53,6 +60,12 @@ class TeacherSubjectController
             return;
         }
 
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) ($subject['institution_id'] ?? 0) !== AccessControl::institutionId($user)) {
+            Response::notFound('Subject not found');
+            return;
+        }
+
         $teachers = $this->teacherSubjectRepo->getSubjectTeachers((int)$subject['subject_id']);
         Response::success($teachers);
     }
@@ -62,6 +75,16 @@ class TeacherSubjectController
         $teacherSubject = $this->teacherSubjectRepo->findById($id);
 
         if (!$teacherSubject) {
+            Response::notFound('Teacher-Subject assignment not found');
+            return;
+        }
+
+        $teacher = $this->teacherRepo->findById((int) $teacherSubject['teacher_id']);
+        $subject = $this->subjectRepo->findById((int) $teacherSubject['subject_id']);
+
+        if (!AccessControl::isSuperAdmin($user)
+            && (($teacher && (int) $teacher['institution_id'] !== AccessControl::institutionId($user))
+                || ($subject && (int) ($subject['institution_id'] ?? 0) !== AccessControl::institutionId($user)))) {
             Response::notFound('Teacher-Subject assignment not found');
             return;
         }
@@ -111,6 +134,14 @@ class TeacherSubjectController
             Response::notFound('Subject not found');
             return;
         }
+
+        if (!AccessControl::isSuperAdmin($user)
+            && ((int) $teacher['institution_id'] !== AccessControl::institutionId($user)
+                || (int) ($subject['institution_id'] ?? 0) !== AccessControl::institutionId($user))) {
+            Response::forbidden('Teacher and subject must belong to your institution');
+            return;
+        }
+
         $data['subject_id'] = (int)$subject['subject_id'];
 
         // Check if assignment already exists
@@ -164,7 +195,47 @@ class TeacherSubjectController
             return;
         }
 
+        $teacher = $this->teacherRepo->findById((int) $teacherSubject['teacher_id']);
+        $subject = $this->subjectRepo->findById((int) $teacherSubject['subject_id']);
+
+        if (!AccessControl::isSuperAdmin($user)
+            && (($teacher && (int) $teacher['institution_id'] !== AccessControl::institutionId($user))
+                || ($subject && (int) ($subject['institution_id'] ?? 0) !== AccessControl::institutionId($user)))) {
+            Response::notFound('Teacher-Subject assignment not found');
+            return;
+        }
+
         $data = json_decode(file_get_contents('php://input'), true);
+
+        if (isset($data['teacher_id'])) {
+            $newTeacher = is_numeric($data['teacher_id'])
+                ? $this->teacherRepo->findById((int) $data['teacher_id'])
+                : $this->teacherRepo->findByUuid((string) $data['teacher_id']);
+            if (!$newTeacher) {
+                Response::notFound('Teacher not found');
+                return;
+            }
+            if (!AccessControl::isSuperAdmin($user)
+                && (int) $newTeacher['institution_id'] !== AccessControl::institutionId($user)) {
+                Response::forbidden('Teacher must belong to your institution');
+                return;
+            }
+        }
+
+        if (isset($data['subject_id'])) {
+            $newSubject = is_numeric($data['subject_id'])
+                ? $this->subjectRepo->findById((int) $data['subject_id'])
+                : $this->subjectRepo->findByUuid((string) $data['subject_id']);
+            if (!$newSubject) {
+                Response::notFound('Subject not found');
+                return;
+            }
+            if (!AccessControl::isSuperAdmin($user)
+                && (int) ($newSubject['institution_id'] ?? 0) !== AccessControl::institutionId($user)) {
+                Response::forbidden('Subject must belong to your institution');
+                return;
+            }
+        }
 
         $validator = new Validator($data);
         if (isset($data['assigned_date'])) {
@@ -194,6 +265,16 @@ class TeacherSubjectController
         $teacherSubject = $this->teacherSubjectRepo->findById($id);
 
         if (!$teacherSubject) {
+            Response::notFound('Teacher-Subject assignment not found');
+            return;
+        }
+
+        $teacher = $this->teacherRepo->findById((int) $teacherSubject['teacher_id']);
+        $subject = $this->subjectRepo->findById((int) $teacherSubject['subject_id']);
+
+        if (!AccessControl::isSuperAdmin($user)
+            && (($teacher && (int) $teacher['institution_id'] !== AccessControl::institutionId($user))
+                || ($subject && (int) ($subject['institution_id'] ?? 0) !== AccessControl::institutionId($user)))) {
             Response::notFound('Teacher-Subject assignment not found');
             return;
         }

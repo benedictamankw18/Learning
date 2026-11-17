@@ -10,6 +10,7 @@ use App\Repositories\StudentRepository;
 use App\Utils\Response;
 use App\Utils\Validator;
 use App\Middleware\RoleMiddleware;
+use App\Security\AccessControl;
 use DateTime;
 use Exception;
 
@@ -419,7 +420,28 @@ class QuizController
         }
 
         // Check authorization
-        if ($user['role'] !== 'super_admin' && $course['institution_id'] != $user['institution_id']) {
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $course['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::error('Course not found', 404);
+            return;
+        }
+
+        $roleMiddleware = new RoleMiddleware($user);
+        if ($roleMiddleware->isAdmin()) {
+            // Admins and super admins may view any course in their institution.
+        } elseif ($roleMiddleware->isTeacher()) {
+            if ((int) ($course['teacher_id'] ?? 0) !== (int) ($user['teacher_id'] ?? 0)) {
+                Response::error('Course not found', 404);
+                return;
+            }
+        } elseif ($roleMiddleware->isStudent()) {
+            $studentId = $this->resolveStudentId($user);
+            if ($studentId === null
+                || !$this->courseRepo->isStudentEnrolledInCourse($courseId, $studentId)) {
+                Response::error('Course not found', 404);
+                return;
+            }
+        } else {
             Response::forbidden('You do not have access to this course');
             return;
         }
@@ -427,7 +449,7 @@ class QuizController
         $quizzes = $this->repo->getCourseQuizzes($courseId);
 
         // Student visibility rule: only active quizzes should be visible.
-        if (($user['role'] ?? '') === 'student') {
+        if ($roleMiddleware->isStudent() && !$roleMiddleware->isAdmin()) {
             $quizzes = array_values(array_filter($quizzes, static function ($quiz) {
                 return strtolower((string) ($quiz['status'] ?? '')) === 'active';
             }));
@@ -453,7 +475,29 @@ class QuizController
         }
 
         // Check authorization
-        if ($user['role'] !== 'super_admin' && $quiz['institution_id'] != $user['institution_id']) {
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $quiz['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::error('Quiz not found', 404);
+            return;
+        }
+
+        $roleMiddleware = new RoleMiddleware($user);
+        if ($roleMiddleware->isAdmin()) {
+            // Admins and super admins may view any quiz in their institution.
+        } elseif ($roleMiddleware->isTeacher()) {
+            if ((int) ($quiz['teacher_id'] ?? 0) !== (int) ($user['teacher_id'] ?? 0)) {
+                Response::error('Quiz not found', 404);
+                return;
+            }
+        } elseif ($roleMiddleware->isStudent()) {
+            $studentId = $this->resolveStudentId($user);
+            if ($studentId === null
+                || !$this->courseRepo->isStudentEnrolledInCourse((int) $quiz['course_id'], $studentId)
+                || !$this->isQuizActive($quiz)) {
+                Response::error('Quiz not found', 404);
+                return;
+            }
+        } else {
             Response::forbidden('You do not have access to this quiz');
             return;
         }
@@ -473,6 +517,11 @@ class QuizController
         }
 
         $data = json_decode(file_get_contents('php://input'), true);
+
+        if (!is_array($data)) {
+            Response::error('Invalid JSON payload', 400);
+            return;
+        }
 
         $validator = new Validator($data);
         $validator->required(['course_id', 'title', 'duration_minutes'])
@@ -507,13 +556,15 @@ class QuizController
         }
 
         // Check authorization
-        if ($user['role'] !== 'super_admin' && $course['institution_id'] != $user['institution_id']) {
-            Response::forbidden('You do not have access to this course');
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $course['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::error('Course not found', 404);
             return;
         }
 
         // Teachers can only create quizzes for their own courses
-        if ($user['role'] === 'teacher' && $course['teacher_id'] != $user['teacher_id']) {
+        if ($roleMiddleware->isTeacher() && !$roleMiddleware->isAdmin()
+            && ($course['teacher_id'] ?? 0) != ($user['teacher_id'] ?? 0)) {
             Response::forbidden('You can only create quizzes for your own courses');
             return;
         }
@@ -551,18 +602,25 @@ class QuizController
         }
 
         // Check authorization
-        if ($user['role'] !== 'super_admin' && $quiz['institution_id'] != $user['institution_id']) {
-            Response::forbidden('You do not have access to this quiz');
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $quiz['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::error('Quiz not found', 404);
             return;
         }
 
         // Teachers can only update their own quizzes
-        if ($user['role'] === 'teacher' && $quiz['teacher_id'] != $user['teacher_id']) {
+        if ($roleMiddleware->isTeacher() && !$roleMiddleware->isAdmin()
+            && ($quiz['teacher_id'] ?? 0) != ($user['teacher_id'] ?? 0)) {
             Response::forbidden('You can only update your own quizzes');
             return;
         }
 
         $data = json_decode(file_get_contents('php://input'), true);
+
+        if (!is_array($data)) {
+            Response::error('Invalid JSON payload', 400);
+            return;
+        }
 
         $validator = new Validator($data);
         $validator->numeric('section_id')
@@ -632,13 +690,15 @@ class QuizController
         }
 
         // Check authorization
-        if ($user['role'] !== 'super_admin' && $quiz['institution_id'] != $user['institution_id']) {
-            Response::forbidden('You do not have access to this quiz');
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $quiz['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::error('Quiz not found', 404);
             return;
         }
 
         // Teachers can only delete their own quizzes
-        if ($user['role'] === 'teacher' && $quiz['teacher_id'] != $user['teacher_id']) {
+        if ($roleMiddleware->isTeacher() && !$roleMiddleware->isAdmin()
+            && ($quiz['teacher_id'] ?? 0) != ($user['teacher_id'] ?? 0)) {
             Response::forbidden('You can only delete your own quizzes');
             return;
         }
@@ -649,7 +709,7 @@ class QuizController
     }
 
     /**
-     * Get questions for a quiz (teacher/admin)
+     * Get questions for a quiz (teacher/admin or enrolled student)
      * GET /quizzes/{id}/questions
      */
     public function getQuestions(array $user, int $id): void
@@ -663,12 +723,48 @@ class QuizController
         }
 
         // Check authorization
-        if ($user['role'] !== 'super_admin' && $quiz['institution_id'] != $user['institution_id']) {
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $quiz['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::error('Quiz not found', 404);
+            return;
+        }
+
+        $roleMiddleware = new RoleMiddleware($user);
+        if ($roleMiddleware->isAdmin()) {
+            // Admins and super admins may view any quiz's questions in their institution.
+        } elseif ($roleMiddleware->isTeacher()) {
+            if ((int) ($quiz['teacher_id'] ?? 0) !== (int) ($user['teacher_id'] ?? 0)) {
+                Response::error('Quiz not found', 404);
+                return;
+            }
+        } elseif ($roleMiddleware->isStudent()) {
+            $studentId = $this->resolveStudentId($user);
+            if ($studentId === null
+                || !$this->courseRepo->isStudentEnrolledInCourse((int) $quiz['course_id'], $studentId)
+                || !$this->isQuizActive($quiz)) {
+                Response::error('Quiz not found', 404);
+                return;
+            }
+        } else {
             Response::forbidden('You do not have access to this quiz');
             return;
         }
 
         $questions = $this->repo->getQuestions($id);
+
+        // Never expose answer keys to students while they are taking the quiz.
+        if ($roleMiddleware->isStudent() && !$roleMiddleware->isAdmin()) {
+            foreach ($questions as &$question) {
+                unset($question['correct_answer'], $question['explanation']);
+                if (isset($question['options']) && is_array($question['options'])) {
+                    foreach ($question['options'] as &$option) {
+                        unset($option['is_correct']);
+                    }
+                    unset($option);
+                }
+            }
+            unset($question);
+        }
 
         Response::success([
             'questions' => $questions,
@@ -696,18 +792,25 @@ class QuizController
         }
 
         // Check authorization
-        if ($user['role'] !== 'super_admin' && $quiz['institution_id'] != $user['institution_id']) {
-            Response::forbidden('You do not have access to this quiz');
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $quiz['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::error('Quiz not found', 404);
             return;
         }
 
         // Teachers can only add questions to their own quizzes
-        if ($user['role'] === 'teacher' && $quiz['teacher_id'] != $user['teacher_id']) {
+        if ($roleMiddleware->isTeacher() && !$roleMiddleware->isAdmin()
+            && ($quiz['teacher_id'] ?? 0) != ($user['teacher_id'] ?? 0)) {
             Response::forbidden('You can only add questions to your own quizzes');
             return;
         }
 
         $data = json_decode(file_get_contents('php://input'), true);
+
+        if (!is_array($data)) {
+            Response::error('Invalid JSON payload', 400);
+            return;
+        }
 
         $validator = new Validator($data);
         $validator->required(['question_text', 'question_type'])
@@ -784,17 +887,24 @@ class QuizController
             return;
         }
 
-        if ($user['role'] !== 'super_admin' && $quiz['institution_id'] != $user['institution_id']) {
-            Response::forbidden('You do not have access to this question');
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $quiz['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::error('Question not found', 404);
             return;
         }
 
-        if ($user['role'] === 'teacher' && $quiz['teacher_id'] != $user['teacher_id']) {
+        if ($roleMiddleware->isTeacher() && !$roleMiddleware->isAdmin()
+            && ($quiz['teacher_id'] ?? 0) != ($user['teacher_id'] ?? 0)) {
             Response::forbidden('You can only update questions in your own quizzes');
             return;
         }
 
         $data = json_decode(file_get_contents('php://input'), true);
+
+        if (!is_array($data)) {
+            Response::error('Invalid JSON payload', 400);
+            return;
+        }
 
         $validator = new Validator($data);
         $validator->max('question_text', 65535)
@@ -858,12 +968,16 @@ class QuizController
             return $path;
         }
 
+        if (strpos($path, '/api/uploads/') === 0) {
+            return '/api/upload/' . substr($path, strlen('/api/uploads/'));
+        }
+
         if (strpos($path, '/api/upload/') === 0) {
             return $path;
         }
 
         if (strpos($path, '/uploads/') === 0) {
-            return '/api' . $path;
+            return '/api/upload' . substr($path, strlen('/uploads'));
         }
 
         if (strpos($path, '/') === false) {
@@ -896,12 +1010,14 @@ class QuizController
             return;
         }
 
-        if ($user['role'] !== 'super_admin' && $quiz['institution_id'] != $user['institution_id']) {
-            Response::forbidden('You do not have access to this question');
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $quiz['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::error('Question not found', 404);
             return;
         }
 
-        if ($user['role'] === 'teacher' && $quiz['teacher_id'] != $user['teacher_id']) {
+        if ($roleMiddleware->isTeacher() && !$roleMiddleware->isAdmin()
+            && ($quiz['teacher_id'] ?? 0) != ($user['teacher_id'] ?? 0)) {
             Response::forbidden('You can only delete questions in your own quizzes');
             return;
         }
@@ -936,8 +1052,14 @@ class QuizController
         }
 
         // Check authorization (student must be enrolled)
-        if ($user['role'] !== 'super_admin' && $quiz['institution_id'] != $user['institution_id']) {
-            Response::forbidden('You do not have access to this quiz');
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $quiz['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::error('Quiz not found', 404);
+            return;
+        }
+
+        if (!$this->courseRepo->isStudentEnrolledInCourse((int) $quiz['course_id'], $studentId)) {
+            Response::error('Quiz not found', 404);
             return;
         }
 
@@ -991,8 +1113,9 @@ class QuizController
         }
 
         // Verify ownership
-        if ($submission['student_id'] != $studentId) {
-            Response::forbidden('This submission does not belong to you');
+        if ((int) $submission['student_id'] !== (int) $studentId
+            || (int) $submission['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::error('Submission not found', 404);
             return;
         }
 
@@ -1003,6 +1126,11 @@ class QuizController
         }
 
         $data = json_decode(file_get_contents('php://input'), true);
+
+        if (!is_array($data)) {
+            Response::error('Invalid JSON payload', 400);
+            return;
+        }
 
         $validator = new Validator($data);
         $validator->required(['answers']);
@@ -1027,18 +1155,15 @@ class QuizController
     }
 
     /**
-     * Get quiz results (student)
+     * Get quiz results (student/teacher/admin)
      * GET /quiz-submissions/{id}
      */
     public function getSubmissionResults(array $user, int $id): void
     {
-        $studentId = null;
-        if (($user['role'] ?? '') === 'student') {
-            $studentId = $this->resolveStudentId($user);
-            if ($studentId === null) {
-                Response::forbidden('Student profile not found for this account');
-                return;
-            }
+        $roleMiddleware = new RoleMiddleware($user);
+        if (!$roleMiddleware->hasRole(['student', 'teacher', 'admin', 'super_admin'])) {
+            Response::forbidden('You do not have access to this submission');
+            return;
         }
 
         // Check if submission exists
@@ -1049,21 +1174,60 @@ class QuizController
             return;
         }
 
-        // Students can only view their own submissions
-        if (($user['role'] ?? '') === 'student' && $submission['student_id'] != $studentId) {
-            Response::forbidden('This submission does not belong to you');
-            return;
-        }
-
-        // Teachers/admins can view all submissions for their courses
-        if (in_array($user['role'], ['teacher', 'admin'])) {
-            if ($user['role'] !== 'super_admin' && $submission['institution_id'] != $user['institution_id']) {
-                Response::forbidden('You do not have access to this submission');
+        if ($roleMiddleware->isStudent()) {
+            $studentId = $this->resolveStudentId($user);
+            if ($studentId === null || (int) $submission['student_id'] !== $studentId) {
+                Response::error('Submission not found', 404);
+                return;
+            }
+        } elseif ($roleMiddleware->isAdmin()) {
+            if (!AccessControl::isSuperAdmin($user)
+                && (int) $submission['institution_id'] !== AccessControl::institutionId($user)) {
+                Response::error('Submission not found', 404);
+                return;
+            }
+        } elseif ($roleMiddleware->isTeacher()) {
+            if (!AccessControl::isSuperAdmin($user)
+                && (int) $submission['institution_id'] !== AccessControl::institutionId($user)) {
+                Response::error('Submission not found', 404);
                 return;
             }
 
-            if ($user['role'] === 'teacher' && $submission['teacher_id'] != $user['teacher_id']) {
-                Response::forbidden('You can only view submissions for your own courses');
+            if ((int) ($submission['teacher_id'] ?? 0) !== (int) ($user['teacher_id'] ?? 0)) {
+                Response::error('Submission not found', 404);
+                return;
+            }
+        }
+
+        // Enforce the quiz's show_results policy for students. Teachers and
+        // admins always receive the full answer breakdown.
+        if ($roleMiddleware->isStudent()) {
+            $canReviewAnswers = false;
+
+            if (($submission['status'] ?? '') === 'submitted') {
+                $quiz = $this->repo->findById((int) ($submission['quiz_id'] ?? 0));
+                $mode = strtolower((string) ($quiz['show_results'] ?? 'after_end'));
+
+                if ($mode === 'instant') {
+                    $canReviewAnswers = true;
+                } elseif ($mode === 'after_end') {
+                    $endDate = trim((string) ($quiz['end_date'] ?? ''));
+                    if ($endDate !== '') {
+                        try {
+                            $canReviewAnswers = new DateTime($endDate) <= new DateTime();
+                        } catch (Exception $e) {
+                            $canReviewAnswers = false;
+                        }
+                    }
+                }
+            }
+
+            if (!$canReviewAnswers) {
+                Response::success(array_merge($submission, [
+                    'questions' => [],
+                    'answers' => [],
+                    'review_available' => false,
+                ]));
                 return;
             }
         }
@@ -1116,12 +1280,14 @@ class QuizController
             return;
         }
 
-        if ($user['role'] !== 'super_admin' && $quiz['institution_id'] != $user['institution_id']) {
-            Response::forbidden('You do not have access to this quiz');
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $quiz['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::error('Quiz not found', 404);
             return;
         }
 
-        if ($user['role'] === 'teacher' && $quiz['teacher_id'] != $user['teacher_id']) {
+        if ($roleMiddleware->isTeacher() && !$roleMiddleware->isAdmin()
+            && ($quiz['teacher_id'] ?? 0) != ($user['teacher_id'] ?? 0)) {
             Response::forbidden('You can only view results for your own quizzes');
             return;
         }
@@ -1158,6 +1324,12 @@ class QuizController
         $quiz = $this->repo->findById($id);
 
         if (!$quiz) {
+            Response::error('Quiz not found', 404);
+            return;
+        }
+
+        if ((int) $quiz['institution_id'] !== AccessControl::institutionId($user)
+            || !$this->courseRepo->isStudentEnrolledInCourse((int) $quiz['course_id'], $studentId)) {
             Response::error('Quiz not found', 404);
             return;
         }

@@ -8,6 +8,7 @@ use App\Repositories\ResultRepository;
 use App\Repositories\StudentRepository;
 use App\Repositories\CourseRepository;
 use App\Middleware\RoleMiddleware;
+use App\Security\AccessControl;
 
 class ResultController
 {
@@ -33,8 +34,15 @@ class ResultController
             return;
         }
 
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $student['institution_id'] !== AccessControl::institutionId($user)
+            && !(AccessControl::hasRole($user, 'student') && (int) $student['user_id'] === (int) $user['user_id'])) {
+            Response::notFound('Student not found');
+            return;
+        }
+
         // Students can only view their own results
-        if ($roleMiddleware->isStudent() && $student['user_id'] != $user['user_id']) {
+        if (AccessControl::hasRole($user, 'student') && (int) $student['user_id'] !== (int) $user['user_id']) {
             Response::forbidden('You can only view your own results');
             return;
         }
@@ -52,6 +60,17 @@ class ResultController
         if (!$result) {
             Response::notFound('Result not found');
             return;
+        }
+
+        $student = $this->studentRepo->findById((int) $result['student_id']);
+        $course = $this->courseRepo->findById((int) $result['course_id']);
+
+        if (!AccessControl::isSuperAdmin($user)) {
+            if (($student && (int) $student['institution_id'] !== AccessControl::institutionId($user))
+                || ($course && (int) $course['institution_id'] !== AccessControl::institutionId($user))) {
+                Response::notFound('Result not found');
+                return;
+            }
         }
 
         // Students can only view results for courses they're enrolled in
@@ -113,6 +132,21 @@ class ResultController
             return;
         }
 
+        $student = $this->studentRepo->findById((int) $data['student_id']);
+        $course = $this->courseRepo->findById((int) $data['course_id']);
+
+        if (!$student || !$course) {
+            Response::validationError(['student_id' => 'Student or course not found']);
+            return;
+        }
+
+        if (!AccessControl::isSuperAdmin($user)
+            && ((int) $student['institution_id'] !== AccessControl::institutionId($user)
+                || (int) $course['institution_id'] !== AccessControl::institutionId($user))) {
+            Response::forbidden('Student and course must belong to your institution');
+            return;
+        }
+
         $resultId = $this->resultRepo->create($data);
 
         if ($resultId) {
@@ -137,6 +171,16 @@ class ResultController
         $result = $this->resultRepo->findById($id);
 
         if (!$result) {
+            Response::notFound('Result not found');
+            return;
+        }
+
+        $student = $this->studentRepo->findById((int) $result['student_id']);
+        $course = $this->courseRepo->findById((int) $result['course_id']);
+
+        if (!AccessControl::isSuperAdmin($user)
+            && (($student && (int) $student['institution_id'] !== AccessControl::institutionId($user))
+                || ($course && (int) $course['institution_id'] !== AccessControl::institutionId($user)))) {
             Response::notFound('Result not found');
             return;
         }
@@ -181,6 +225,16 @@ class ResultController
             return;
         }
 
+        $student = $this->studentRepo->findById((int) $result['student_id']);
+        $course = $this->courseRepo->findById((int) $result['course_id']);
+
+        if (!AccessControl::isSuperAdmin($user)
+            && (($student && (int) $student['institution_id'] !== AccessControl::institutionId($user))
+                || ($course && (int) $course['institution_id'] !== AccessControl::institutionId($user)))) {
+            Response::notFound('Result not found');
+            return;
+        }
+
         if ($this->resultRepo->delete($id)) {
             Response::success(['message' => 'Result deleted successfully']);
         } else {
@@ -190,6 +244,25 @@ class ResultController
 
     public function getCourseResults(array $user, int $courseId): void
     {
+        if (!AccessControl::isSuperAdmin($user)
+            && !AccessControl::isAdmin($user)
+            && !AccessControl::hasRole($user, 'teacher')) {
+            Response::forbidden('You do not have permission to view course results');
+            return;
+        }
+
+        $course = $this->courseRepo->findById($courseId);
+        if (!$course) {
+            Response::notFound('Course not found');
+            return;
+        }
+
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $course['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Course not found');
+            return;
+        }
+
         $semesterId = isset($_GET['semester_id']) ? (int) $_GET['semester_id'] : null;
         $results = $this->resultRepo->getCourseResults($courseId, $semesterId);
 

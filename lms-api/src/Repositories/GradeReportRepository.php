@@ -71,6 +71,11 @@ class GradeReportRepository extends BaseRepository
             $params[':academic_year_id'] = $filters['academic_year_id'];
         }
 
+        if (!empty($filters['institution_id'])) {
+            $sql .= " AND gr.institution_id = :institution_id";
+            $params[':institution_id'] = $filters['institution_id'];
+        }
+
         if (!empty($filters['generated_by'])) {
             $sql .= " AND gr.generated_by = :generated_by";
             $params[':generated_by'] = $filters['generated_by'];
@@ -133,6 +138,11 @@ class GradeReportRepository extends BaseRepository
         if (!empty($filters['academic_year_id'])) {
             $sql .= " AND gr.academic_year_id = :academic_year_id";
             $params[':academic_year_id'] = $filters['academic_year_id'];
+        }
+
+        if (!empty($filters['institution_id'])) {
+            $sql .= " AND gr.institution_id = :institution_id";
+            $params[':institution_id'] = $filters['institution_id'];
         }
 
         if (!empty($filters['generated_by'])) {

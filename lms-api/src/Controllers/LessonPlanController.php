@@ -10,7 +10,7 @@ use App\Repositories\CourseRepository;
 use App\Repositories\TeacherRepository;
 use App\Repositories\NotificationRepository;
 use App\Middleware\RoleMiddleware;
-
+use App\Security\AccessControl;
 class LessonPlanController
 {
     private LessonPlanRepository $lessonPlanRepo;
@@ -84,6 +84,18 @@ class LessonPlanController
             return;
         }
 
+        $course = $this->courseRepo->findById($courseId);
+        if (!$course) {
+            Response::notFound('Course not found');
+            return;
+        }
+
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $course['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Course not found');
+            return;
+        }
+
         $lessonPlans = $this->lessonPlanRepo->getCourseLessonPlans($courseId);
         Response::success($lessonPlans);
     }
@@ -101,6 +113,18 @@ class LessonPlanController
             return;
         }
 
+        $course = $this->courseRepo->findById($courseId);
+        if (!$course) {
+            Response::notFound('Course not found');
+            return;
+        }
+
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $course['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Course not found');
+            return;
+        }
+
         $lessonPlans = $this->lessonPlanRepo->getByWeek($courseId, $week);
         Response::success($lessonPlans);
     }
@@ -112,6 +136,18 @@ class LessonPlanController
     {
         $lessonPlan = $this->lessonPlanRepo->findById($id);
         if (!$lessonPlan) {
+            Response::notFound('Lesson plan not found');
+            return;
+        }
+
+        $course = $this->courseRepo->findById((int) $lessonPlan['course_id']);
+        if (!$course) {
+            Response::notFound('Course not found');
+            return;
+        }
+
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $course['institution_id'] !== AccessControl::institutionId($user)) {
             Response::notFound('Lesson plan not found');
             return;
         }
@@ -146,6 +182,18 @@ class LessonPlanController
             return;
         }
 
+        $course = $this->courseRepo->findById((int) $data['course_id']);
+        if (!$course) {
+            Response::notFound('Course not found');
+            return;
+        }
+
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $course['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::forbidden('You can only create lesson plans for courses in your institution');
+            return;
+        }
+
         $data['created_by'] = $user['user_id'];
         $id = $this->lessonPlanRepo->create($data);
         
@@ -176,6 +224,18 @@ class LessonPlanController
 
         $lessonPlan = $this->lessonPlanRepo->findById($id);
         if (!$lessonPlan) {
+            Response::notFound('Lesson plan not found');
+            return;
+        }
+
+        $course = $this->courseRepo->findById((int) $lessonPlan['course_id']);
+        if (!$course) {
+            Response::notFound('Course not found');
+            return;
+        }
+
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $course['institution_id'] !== AccessControl::institutionId($user)) {
             Response::notFound('Lesson plan not found');
             return;
         }
@@ -238,6 +298,18 @@ class LessonPlanController
             return;
         }
 
+        $course = $this->courseRepo->findById((int) $lessonPlan['course_id']);
+        if (!$course) {
+            Response::notFound('Course not found');
+            return;
+        }
+
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $course['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Lesson plan not found');
+            return;
+        }
+
         $deleted = $this->lessonPlanRepo->delete($id);
         if (!$deleted) {
             Response::serverError('Failed to delete lesson plan');
@@ -257,6 +329,18 @@ class LessonPlanController
 
         $lessonPlan = $this->lessonPlanRepo->findById($id);
         if (!$lessonPlan) {
+            Response::notFound('Lesson plan not found');
+            return;
+        }
+
+        $course = $this->courseRepo->findById((int) $lessonPlan['course_id']);
+        if (!$course) {
+            Response::notFound('Course not found');
+            return;
+        }
+
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $course['institution_id'] !== AccessControl::institutionId($user)) {
             Response::notFound('Lesson plan not found');
             return;
         }
@@ -300,6 +384,18 @@ class LessonPlanController
 
         $lessonPlan = $this->lessonPlanRepo->findById($id);
         if (!$lessonPlan) {
+            Response::notFound('Lesson plan not found');
+            return;
+        }
+
+        $course = $this->courseRepo->findById((int) $lessonPlan['course_id']);
+        if (!$course) {
+            Response::notFound('Course not found');
+            return;
+        }
+
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $course['institution_id'] !== AccessControl::institutionId($user)) {
             Response::notFound('Lesson plan not found');
             return;
         }

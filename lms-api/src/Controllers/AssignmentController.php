@@ -12,6 +12,7 @@ use App\Utils\Response;
 use App\Utils\Validator;
 use App\Utils\UuidHelper;
 use App\Middleware\RoleMiddleware;
+use App\Security\AccessControl;
 use DateTime;
 use Exception;
 
@@ -50,6 +51,62 @@ class AssignmentController
         $this->studentRepo = new StudentRepository();
                 $this->notificationRepo = new NotificationRepository();
         }
+
+    /**
+     * Validate a client-supplied upload reference for an assignment.
+     *
+     * New uploads are stored as "<institution_id>/<category>/<filename>".
+     * Legacy flat paths (for example "assignments/file.pdf") are still accepted
+     * during the migration window. Absolute paths, URLs, traversal segments,
+     * and references to another institution are rejected.
+     *
+     * @return array{valid:bool,value:?string}
+     */
+    private function validateUploadReference($value, int $institutionId): array
+    {
+        if ($value === null) {
+            return ['valid' => true, 'value' => null];
+        }
+
+        if (!is_string($value)) {
+            return ['valid' => false, 'value' => null];
+        }
+
+        $normalized = str_replace('\\', '/', trim($value));
+        if ($normalized === '') {
+            return ['valid' => true, 'value' => null];
+        }
+
+        if (preg_match('#^[a-z][a-z0-9+.-]*://#i', $normalized) || str_starts_with($normalized, '//')) {
+            return ['valid' => false, 'value' => null];
+        }
+
+        $normalized = ltrim($normalized, '/');
+        if (str_starts_with($normalized, 'api/upload/')) {
+            $normalized = substr($normalized, strlen('api/upload/'));
+        } elseif (str_starts_with($normalized, 'uploads/')) {
+            $normalized = substr($normalized, strlen('uploads/'));
+        }
+
+        if ($normalized === '' || str_contains($normalized, "\0")) {
+            return ['valid' => false, 'value' => null];
+        }
+
+        $segments = explode('/', $normalized);
+        foreach ($segments as $segment) {
+            if ($segment === '' || $segment === '.' || $segment === '..') {
+                return ['valid' => false, 'value' => null];
+            }
+        }
+
+        if (ctype_digit($segments[0])) {
+            if ($institutionId <= 0 || (int) $segments[0] !== $institutionId) {
+                return ['valid' => false, 'value' => null];
+            }
+        }
+
+        return ['valid' => true, 'value' => $normalized];
+    }
 
     /**
      * Resolve parent_id from auth payload, with fallback lookup by user_id.
@@ -260,7 +317,28 @@ class AssignmentController
         }
 
         // Check authorization
-        if ($user['role'] !== 'super_admin' && $course['institution_id'] != $user['institution_id']) {
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $course['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::error('Course not found', 404);
+            return;
+        }
+
+        $roleMiddleware = new RoleMiddleware($user);
+        if ($roleMiddleware->isAdmin()) {
+            // Admins and super admins may view any course in their institution.
+        } elseif ($roleMiddleware->isTeacher()) {
+            if ((int) ($course['teacher_id'] ?? 0) !== (int) ($user['teacher_id'] ?? 0)) {
+                Response::error('Course not found', 404);
+                return;
+            }
+        } elseif ($roleMiddleware->isStudent()) {
+            $studentId = $this->resolveStudentId($user);
+            if ($studentId <= 0
+                || !$this->courseRepo->isStudentEnrolledInCourse($courseId, $studentId)) {
+                Response::error('Course not found', 404);
+                return;
+            }
+        } else {
             Response::forbidden('You do not have access to this course');
             return;
         }
@@ -293,7 +371,28 @@ class AssignmentController
         }
 
         // Check authorization
-        if ($user['role'] !== 'super_admin' && $assignment['institution_id'] != $user['institution_id']) {
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $assignment['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::error('Assignment not found', 404);
+            return;
+        }
+
+        $roleMiddleware = new RoleMiddleware($user);
+        if ($roleMiddleware->isAdmin()) {
+            // Admins and super admins may view any assignment in their institution.
+        } elseif ($roleMiddleware->isTeacher()) {
+            if ((int) ($assignment['teacher_id'] ?? 0) !== (int) ($user['teacher_id'] ?? 0)) {
+                Response::error('Assignment not found', 404);
+                return;
+            }
+        } elseif ($roleMiddleware->isStudent()) {
+            $studentId = $this->resolveStudentId($user);
+            if ($studentId <= 0
+                || !$this->courseRepo->isStudentEnrolledInCourse((int) $assignment['course_id'], $studentId)) {
+                Response::error('Assignment not found', 404);
+                return;
+            }
+        } else {
             Response::forbidden('You do not have access to this assignment');
             return;
         }
@@ -313,6 +412,11 @@ class AssignmentController
         }
 
         $data = json_decode(file_get_contents('php://input'), true);
+
+        if (!is_array($data)) {
+            Response::error('Invalid JSON payload', 400);
+            return;
+        }
 
         $validator = new Validator($data);
         $validator->required(['course_id', 'title'])
@@ -346,15 +450,26 @@ class AssignmentController
         }
 
         // Check authorization
-        if ($user['role'] !== 'super_admin' && $course['institution_id'] != $user['institution_id']) {
-            Response::forbidden('You do not have access to this course');
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $course['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::error('Course not found', 404);
             return;
         }
 
         // Teachers can only create assignments for their own courses
-        if ($user['role'] === 'teacher' && $course['teacher_id'] != $user['teacher_id']) {
+        if ($roleMiddleware->isTeacher() && !$roleMiddleware->isAdmin()
+            && ($course['teacher_id'] ?? 0) != ($user['teacher_id'] ?? 0)) {
             Response::forbidden('You can only create assignments for your own courses');
             return;
+        }
+
+        if (array_key_exists('file_path', $data)) {
+            $fileCheck = $this->validateUploadReference($data['file_path'], (int) $course['institution_id']);
+            if (!$fileCheck['valid']) {
+                Response::validationError(['file_path' => 'Invalid or cross-institution file reference']);
+                return;
+            }
+            $data['file_path'] = $fileCheck['value'];
         }
 
         $assignmentId = $this->repo->create($data);
@@ -398,18 +513,25 @@ class AssignmentController
         $assignmentId = $assignment['assignment_id'];
 
         // Check authorization
-        if ($user['role'] !== 'super_admin' && $assignment['institution_id'] != $user['institution_id']) {
-            Response::forbidden('You do not have access to this assignment');
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $assignment['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::error('Assignment not found', 404);
             return;
         }
 
         // Teachers can only update their own assignments
-        if ($user['role'] === 'teacher' && $assignment['teacher_id'] != $user['teacher_id']) {
+        if ($roleMiddleware->isTeacher() && !$roleMiddleware->isAdmin()
+            && ($assignment['teacher_id'] ?? 0) != ($user['teacher_id'] ?? 0)) {
             Response::forbidden('You can only update your own assignments');
             return;
         }
 
         $data = json_decode(file_get_contents('php://input'), true);
+
+        if (!is_array($data)) {
+            Response::error('Invalid JSON payload', 400);
+            return;
+        }
 
         $validator = new Validator($data);
         $validator->numeric('section_id')
@@ -430,6 +552,15 @@ class AssignmentController
         }
         if (array_key_exists('publish_date', $data)) {
             $data['publish_date'] = $this->normalizeDateTime($data['publish_date']);
+        }
+
+        if (array_key_exists('file_path', $data)) {
+            $fileCheck = $this->validateUploadReference($data['file_path'], (int) $assignment['institution_id']);
+            if (!$fileCheck['valid']) {
+                Response::validationError(['file_path' => 'Invalid or cross-institution file reference']);
+                return;
+            }
+            $data['file_path'] = $fileCheck['value'];
         }
 
         $this->repo->update($assignmentId, $data);
@@ -473,13 +604,15 @@ class AssignmentController
         $assignmentId = $assignment['assignment_id'];
 
         // Check authorization
-        if ($user['role'] !== 'super_admin' && $assignment['institution_id'] != $user['institution_id']) {
-            Response::forbidden('You do not have access to this assignment');
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $assignment['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::error('Assignment not found', 404);
             return;
         }
 
         // Teachers can only delete their own assignments
-        if ($user['role'] === 'teacher' && $assignment['teacher_id'] != $user['teacher_id']) {
+        if ($roleMiddleware->isTeacher() && !$roleMiddleware->isAdmin()
+            && ($assignment['teacher_id'] ?? 0) != ($user['teacher_id'] ?? 0)) {
             Response::forbidden('You can only delete your own assignments');
             return;
         }
@@ -517,13 +650,15 @@ class AssignmentController
         $assignmentId = $assignment['assignment_id'];
 
         // Check authorization
-        if ($user['role'] !== 'super_admin' && $assignment['institution_id'] != $user['institution_id']) {
-            Response::forbidden('You do not have access to this assignment');
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $assignment['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::error('Assignment not found', 404);
             return;
         }
 
         // Teachers can only view submissions for their own assignments
-        if ($user['role'] === 'teacher' && $assignment['teacher_id'] != $user['teacher_id']) {
+        if ($roleMiddleware->isTeacher() && !$roleMiddleware->isAdmin()
+            && ($assignment['teacher_id'] ?? 0) != ($user['teacher_id'] ?? 0)) {
             Response::forbidden('You can only view submissions for your own assignments');
             return;
         }
@@ -567,12 +702,14 @@ class AssignmentController
             return;
         }
 
-        if ($user['role'] !== 'super_admin' && $assignment['institution_id'] != $user['institution_id']) {
-            Response::forbidden('You do not have access to this assignment');
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $assignment['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::error('Assignment not found', 404);
             return;
         }
 
-        if ($user['role'] === 'teacher' && $assignment['teacher_id'] != $user['teacher_id']) {
+        if ($roleMiddleware->isTeacher() && !$roleMiddleware->isAdmin()
+            && ($assignment['teacher_id'] ?? 0) != ($user['teacher_id'] ?? 0)) {
             Response::forbidden('You can only download submissions for your own assignments');
             return;
         }
@@ -617,12 +754,14 @@ class AssignmentController
             return;
         }
 
-        if ($user['role'] !== 'super_admin' && $assignment['institution_id'] != $user['institution_id']) {
-            Response::forbidden('You do not have access to this assignment');
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $assignment['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::error('Assignment not found', 404);
             return;
         }
 
-        if ($user['role'] === 'teacher' && $assignment['teacher_id'] != $user['teacher_id']) {
+        if ($roleMiddleware->isTeacher() && !$roleMiddleware->isAdmin()
+            && ($assignment['teacher_id'] ?? 0) != ($user['teacher_id'] ?? 0)) {
             Response::forbidden('You can only publish grades for your own assignments');
             return;
         }
@@ -663,8 +802,20 @@ class AssignmentController
         $assignmentId = $assignment['assignment_id'];
 
         // Check authorization (student must be enrolled in the course)
-        if ($user['role'] !== 'super_admin' && $assignment['institution_id'] != $user['institution_id']) {
-            Response::forbidden('You do not have access to this assignment');
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $assignment['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::error('Assignment not found', 404);
+            return;
+        }
+
+        $studentId = $this->resolveStudentId($user);
+        if ($studentId <= 0) {
+            Response::notFound('Student record not found');
+            return;
+        }
+
+        if (!$this->courseRepo->isStudentEnrolledInCourse((int) $assignment['course_id'], $studentId)) {
+            Response::error('Assignment not found', 404);
             return;
         }
 
@@ -680,6 +831,11 @@ class AssignmentController
 
         $data = json_decode(file_get_contents('php://input'), true);
 
+        if (!is_array($data)) {
+            Response::error('Invalid JSON payload', 400);
+            return;
+        }
+
         $validator = new Validator($data);
         $validator->max('submission_file', 500);
 
@@ -688,10 +844,13 @@ class AssignmentController
             return;
         }
 
-        $studentId = $this->resolveStudentId($user);
-        if ($studentId <= 0) {
-            Response::notFound('Student record not found');
-            return;
+        if (array_key_exists('submission_file', $data)) {
+            $fileCheck = $this->validateUploadReference($data['submission_file'], (int) $assignment['institution_id']);
+            if (!$fileCheck['valid']) {
+                Response::validationError(['submission_file' => 'Invalid or cross-institution file reference']);
+                return;
+            }
+            $data['submission_file'] = $fileCheck['value'];
         }
 
         $existingSubmission = $this->repo->getStudentSubmission($assignmentId, $studentId);
@@ -732,18 +891,25 @@ class AssignmentController
         }
 
         // Check authorization
-        if ($user['role'] !== 'super_admin' && $submission['institution_id'] != $user['institution_id']) {
-            Response::forbidden('You do not have access to this submission');
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $submission['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::error('Submission not found', 404);
             return;
         }
 
         // Teachers can only grade submissions for their own courses
-        if ($user['role'] === 'teacher' && $submission['teacher_id'] != $user['teacher_id']) {
+        if ($roleMiddleware->isTeacher() && !$roleMiddleware->isAdmin()
+            && ($submission['teacher_id'] ?? 0) != ($user['teacher_id'] ?? 0)) {
             Response::forbidden('You can only grade submissions for your own courses');
             return;
         }
 
         $data = json_decode(file_get_contents('php://input'), true);
+
+        if (!is_array($data)) {
+            Response::error('Invalid JSON payload', 400);
+            return;
+        }
 
         $validator = new Validator($data);
         $validator->required(['score'])

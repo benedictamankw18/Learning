@@ -7,6 +7,7 @@ use App\Repositories\ClassSubjectRepository;
 use App\Utils\Response;
 use App\Utils\Validator;
 use App\Middleware\RoleMiddleware;
+use App\Security\AccessControl;
 
 class CourseSectionController
 {
@@ -34,8 +35,9 @@ class CourseSectionController
         }
 
         // Check authorization
-        if ($user['role'] !== 'super_admin' && $course['institution_id'] != $user['institution_id']) {
-            Response::forbidden('You do not have access to this course');
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $course['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::error('Course not found', 404);
             return;
         }
 
@@ -67,13 +69,14 @@ class CourseSectionController
         }
 
         // Check authorization
-        if ($user['role'] !== 'super_admin' && $course['institution_id'] != $user['institution_id']) {
-            Response::forbidden('You do not have access to this course');
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $course['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::error('Course not found', 404);
             return;
         }
 
         // Teachers can only create sections for their own courses
-        if ($user['role'] === 'teacher') {
+        if ($roleMiddleware->isTeacher() && !$roleMiddleware->isAdmin()) {
             $teacherId = $user['teacher_id'] ?? null;
             if ($teacherId === null) {
                 Response::forbidden('Teacher profile is not linked to this user account');
@@ -81,12 +84,17 @@ class CourseSectionController
             }
 
             if ((int) ($course['teacher_id'] ?? 0) !== (int) $teacherId) {
-                Response::forbidden('You can only create sections for your own courses');
+                Response::error('Course not found', 404);
                 return;
             }
         }
 
         $data = json_decode(file_get_contents('php://input'), true);
+
+        if (!is_array($data)) {
+            Response::error('Invalid JSON payload', 400);
+            return;
+        }
 
         $validator = new Validator($data);
         $validator->required(['section_name'])
@@ -132,21 +140,27 @@ class CourseSectionController
             return;
         }
 
+        // Check authorization
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $section['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::error('Section not found', 404);
+            return;
+        }
+
         // Verify section belongs to course
-        if ($section['course_id'] != $courseId) {
+        if ((int) $section['course_id'] !== $courseId) {
             Response::error('Section does not belong to this course', 400);
             return;
         }
 
-        // Check authorization
-        if ($user['role'] !== 'super_admin' && $section['institution_id'] != $user['institution_id']) {
-            Response::forbidden('You do not have access to this section');
-            return;
-        }
-
         // Teachers can only update sections for their own courses
-        if ($user['role'] === 'teacher') {
+        if ($roleMiddleware->isTeacher() && !$roleMiddleware->isAdmin()) {
             $course = $this->courseRepo->findById($courseId);
+            if (!$course) {
+                Response::error('Section not found', 404);
+                return;
+            }
+
             $teacherId = $user['teacher_id'] ?? null;
             if ($teacherId === null) {
                 Response::forbidden('Teacher profile is not linked to this user account');
@@ -154,12 +168,17 @@ class CourseSectionController
             }
 
             if ((int) ($course['teacher_id'] ?? 0) !== (int) $teacherId) {
-                Response::forbidden('You can only update sections for your own courses');
+                Response::error('Section not found', 404);
                 return;
             }
         }
 
         $data = json_decode(file_get_contents('php://input'), true);
+
+        if (!is_array($data)) {
+            Response::error('Invalid JSON payload', 400);
+            return;
+        }
 
         $validator = new Validator($data);
         $validator->max('section_name', 100)
@@ -199,21 +218,27 @@ class CourseSectionController
             return;
         }
 
+        // Check authorization
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $section['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::error('Section not found', 404);
+            return;
+        }
+
         // Verify section belongs to course
-        if ($section['course_id'] != $courseId) {
+        if ((int) $section['course_id'] !== $courseId) {
             Response::error('Section does not belong to this course', 400);
             return;
         }
 
-        // Check authorization
-        if ($user['role'] !== 'super_admin' && $section['institution_id'] != $user['institution_id']) {
-            Response::forbidden('You do not have access to this section');
-            return;
-        }
-
         // Teachers can only delete sections for their own courses
-        if ($user['role'] === 'teacher') {
+        if ($roleMiddleware->isTeacher() && !$roleMiddleware->isAdmin()) {
             $course = $this->courseRepo->findById($courseId);
+            if (!$course) {
+                Response::error('Section not found', 404);
+                return;
+            }
+
             $teacherId = $user['teacher_id'] ?? null;
             if ($teacherId === null) {
                 Response::forbidden('Teacher profile is not linked to this user account');
@@ -221,7 +246,7 @@ class CourseSectionController
             }
 
             if ((int) ($course['teacher_id'] ?? 0) !== (int) $teacherId) {
-                Response::forbidden('You can only delete sections for your own courses');
+                Response::error('Section not found', 404);
                 return;
             }
         }

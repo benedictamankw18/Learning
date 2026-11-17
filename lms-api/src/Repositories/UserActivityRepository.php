@@ -43,7 +43,7 @@ class UserActivityRepository extends BaseRepository
 
     public function getAll(array $filters = [], int $limit = 50, int $offset = 0): array
     {
-        $sql = "SELECT ua.*, 
+        $sql = "SELECT ua.*,
                 CONCAT(u.first_name, ' ', u.last_name) as user_name,
                 u.email,
                 r.role_name
@@ -133,6 +133,24 @@ class UserActivityRepository extends BaseRepository
         return $result['total'];
     }
 
+    public function findById(int $id): ?array
+    {
+        $sql = "SELECT ua.*,
+                CONCAT(u.first_name, ' ', u.last_name) as user_name,
+                u.email,
+                u.institution_id
+                FROM {$this->table} ua
+                LEFT JOIN users u ON ua.user_id = u.user_id
+                WHERE ua.activity_id = :id
+                LIMIT 1";
+
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute([':id' => $id]);
+        $activity = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        return $activity ?: null;
+    }
+
     public function getUserHistory($userId, $limit = 100, $offset = 0)
     {
         $sql = "SELECT * FROM {$this->table} 
@@ -151,7 +169,7 @@ class UserActivityRepository extends BaseRepository
 
     public function getRecent($institutionId = null, $limit = 50)
     {
-        $sql = "SELECT ua.*, 
+        $sql = "SELECT ua.*,
                 CONCAT(u.first_name, ' ', u.last_name) as user_name,
                 u.email
                 FROM {$this->table} ua
@@ -182,7 +200,7 @@ class UserActivityRepository extends BaseRepository
 
     public function getByAction($action, $institutionId = null, $limit = 100)
     {
-        $sql = "SELECT ua.*, 
+        $sql = "SELECT ua.*,
                 CONCAT(u.first_name, ' ', u.last_name) as user_name,
                 u.email
                 FROM {$this->table} ua
@@ -294,21 +312,32 @@ class UserActivityRepository extends BaseRepository
         ];
     }
 
-    public function getByEntity($entityType, $entityId, $limit = 50)
+    public function getByEntity($entityType, $entityId, $limit = 50, $institutionId = null)
     {
-        $sql = "SELECT ua.*, 
+        $sql = "SELECT ua.*,
                 CONCAT(u.first_name, ' ', u.last_name) as user_name,
                 u.email
                 FROM {$this->table} ua
                 LEFT JOIN users u ON ua.user_id = u.user_id
                 WHERE ua.entity_type = :entity_type 
-                AND ua.entity_id = :entity_id
-                ORDER BY ua.created_at DESC 
-                LIMIT :limit";
+                AND ua.entity_id = :entity_id";
+
+        $params = [
+            ':entity_type' => $entityType,
+            ':entity_id' => $entityId,
+        ];
+
+        if ($institutionId) {
+            $sql .= " AND u.institution_id = :institution_id";
+            $params[':institution_id'] = $institutionId;
+        }
+
+        $sql .= " ORDER BY ua.created_at DESC LIMIT :limit";
 
         $stmt = $this->db->prepare($sql);
-        $stmt->bindValue(':entity_type', $entityType);
-        $stmt->bindValue(':entity_id', $entityId, PDO::PARAM_INT);
+        foreach ($params as $key => $value) {
+            $stmt->bindValue($key, $value);
+        }
         $stmt->bindValue(':limit', (int) $limit, PDO::PARAM_INT);
         $stmt->execute();
 
@@ -329,7 +358,7 @@ class UserActivityRepository extends BaseRepository
 
     public function getAuditTrail($startDate, $endDate, $institutionId = null, $action = null)
     {
-        $sql = "SELECT ua.*, 
+        $sql = "SELECT ua.*,
                 CONCAT(u.first_name, ' ', u.last_name) as user_name,
                 u.email,
                 r.role_name

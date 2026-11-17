@@ -7,7 +7,7 @@ use App\Repositories\MessageRepository;
 use App\Utils\Response;
 use App\Utils\Validator;
 use App\Utils\UuidHelper;
-
+use App\Security\AccessControl;
 class NotificationController
 {
     private NotificationRepository $notificationRepo;
@@ -82,6 +82,12 @@ class NotificationController
             return;
         }
 
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) ($notification['institution_id'] ?? 0) !== AccessControl::institutionId($user)) {
+            Response::error('Notification not found', 404);
+            return;
+        }
+
         Response::success($notification);
     }
 
@@ -108,6 +114,10 @@ class NotificationController
         if ($data['sender_id'] <= 0) {
             Response::error('Unable to resolve notification sender', 400);
             return;
+        }
+
+        if (!AccessControl::isSuperAdmin($user)) {
+            $data['institution_id'] = AccessControl::institutionId($user);
         }
 
         $validator = new Validator($data);
@@ -142,6 +152,12 @@ class NotificationController
         $notification = $this->notificationRepo->findByUuid($sanitizedUuid, $userId);
 
         if (!$notification) {
+            Response::error('Notification not found', 404);
+            return;
+        }
+
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) ($notification['institution_id'] ?? 0) !== AccessControl::institutionId($user)) {
             Response::error('Notification not found', 404);
             return;
         }

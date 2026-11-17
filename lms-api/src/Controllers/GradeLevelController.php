@@ -3,6 +3,7 @@
 namespace App\Controllers;
 
 use App\Utils\Response;
+use App\Security\AccessControl;
 use App\Utils\Validator;
 use App\Repositories\GradeLevelRepository;
 use App\Repositories\NotificationRepository;
@@ -47,11 +48,14 @@ class GradeLevelController
     {
         $page = isset($_GET['page']) ? (int) $_GET['page'] : 1;
         $limit = isset($_GET['limit']) ? (int) $_GET['limit'] : 20;
-        $institutionId = isset($_GET['institution_id']) ? (int) $_GET['institution_id'] : null;
-
-        // Super admin can view all institutions' grade levels
-        if ($user['role'] !== 'super_admin' && !$institutionId) {
-            $institutionId = $user['institution_id'];
+        // Only super admins may choose an institution. Super admins without an
+        // explicit filter retain global visibility (null = no institution filter).
+        if (AccessControl::isSuperAdmin($user)) {
+            $institutionId = isset($_GET['institution_id']) && $_GET['institution_id'] !== ''
+                ? (int) $_GET['institution_id']
+                : null;
+        } else {
+            $institutionId = AccessControl::institutionId($user);
         }
 
         $gradeLevels = $this->repo->getAll($page, $limit, $institutionId);

@@ -6,7 +6,7 @@ use App\Repositories\EventRepository;
 use App\Utils\Response;
 use App\Utils\UuidHelper;
 use App\Repositories\NotificationRepository;
-
+use App\Security\AccessControl;
 class EventController
 {
     private $eventRepository;
@@ -36,10 +36,34 @@ class EventController
         }
 
         if ($this->isAdminRole($user)) {
-            return true;
+            if (AccessControl::isSuperAdmin($user)) {
+                return true;
+            }
+
+            return !isset($event['institution_id'])
+                || (int) $event['institution_id'] === AccessControl::institutionId($user);
         }
 
         return isset($event['created_by']) && (int) $event['created_by'] === $userId;
+    }
+
+    private function normalizeDateTime(?string $value): ?string
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        $value = trim((string) $value);
+        if ($value === '') {
+            return null;
+        }
+
+        try {
+            $dt = new \DateTime($value);
+            return $dt->format('Y-m-d H:i:s');
+        } catch (\Exception $e) {
+            return $value;
+        }
     }
 
     /**
@@ -136,7 +160,11 @@ class EventController
     public function index(array $user): void
     {
         try {
-            $institutionId = $_GET['institution_id'] ?? null;
+            if (AccessControl::isSuperAdmin($user) && isset($_GET['institution_id']) && $_GET['institution_id'] !== '') {
+                $institutionId = (int) $_GET['institution_id'];
+            } else {
+                $institutionId = AccessControl::institutionId($user);
+            }
             $type = $_GET['type'] ?? null;
             $startDate = $_GET['start_date'] ?? null;
             $endDate = $_GET['end_date'] ?? null;
@@ -187,7 +215,11 @@ class EventController
     public function getUpcoming(array $user): void
     {
         try {
-            $institutionId = $_GET['institution_id'] ?? null;
+            if (AccessControl::isSuperAdmin($user) && isset($_GET['institution_id']) && $_GET['institution_id'] !== '') {
+                $institutionId = (int) $_GET['institution_id'];
+            } else {
+                $institutionId = AccessControl::institutionId($user);
+            }
             $days = $_GET['days'] ?? 30;
             $limit = $_GET['limit'] ?? 20;
             $publishedOnly = !empty($_GET['published_only']);
@@ -212,7 +244,11 @@ class EventController
     public function getCalendar(array $user): void
     {
         try {
-            $institutionId = $_GET['institution_id'] ?? null;
+            if (AccessControl::isSuperAdmin($user) && isset($_GET['institution_id']) && $_GET['institution_id'] !== '') {
+                $institutionId = (int) $_GET['institution_id'];
+            } else {
+                $institutionId = AccessControl::institutionId($user);
+            }
             $viewerUserId = $this->getUserId($user);
             $viewerIsAdmin = $this->isAdminRole($user);
             $publishedOnly = !empty($_GET['published_only']);
@@ -260,6 +296,13 @@ class EventController
                 return;
             }
 
+            if (!AccessControl::isSuperAdmin($user)
+                && isset($event['institution_id'])
+                && (int) $event['institution_id'] !== AccessControl::institutionId($user)) {
+                Response::notFound('Event not found');
+                return;
+            }
+
             $targetRole = strtolower((string) ($event['target_role'] ?? 'all'));
             if ($targetRole === 'personal' && !$this->canManageEvent($user, $event)) {
                 Response::forbidden('You are not allowed to view this personal event.');
@@ -302,8 +345,10 @@ class EventController
                 $data['event_type'] = $data['type'];
             }
 
-            // Set institution_id from authenticated user if not provided
-            if (empty($data['institution_id'])) {
+            // Institution admins cannot create events for another institution.
+            if (!AccessControl::isSuperAdmin($user)) {
+                $data['institution_id'] = AccessControl::institutionId($user);
+            } elseif (empty($data['institution_id'])) {
                 $data['institution_id'] = $user['institution_id'] ?? 1;
             }
 
@@ -404,6 +449,13 @@ class EventController
                 return;
             }
 
+            if (!AccessControl::isSuperAdmin($user)
+                && isset($event['institution_id'])
+                && (int) $event['institution_id'] !== AccessControl::institutionId($user)) {
+                Response::notFound('Event not found');
+                return;
+            }
+
             $data = json_decode(file_get_contents('php://input'), true);
             
             // Map frontend field names to database columns
@@ -454,6 +506,10 @@ class EventController
 
             unset($data['type']);
 
+            if (!AccessControl::isSuperAdmin($user)) {
+                unset($data['institution_id']);
+            }
+
             $wasPublished = (int) ($event['is_published'] ?? 0);
             $this->eventRepository->update($eventId, $data);
 
@@ -496,6 +552,13 @@ class EventController
                 return;
             }
 
+            if (!AccessControl::isSuperAdmin($user)
+                && isset($event['institution_id'])
+                && (int) $event['institution_id'] !== AccessControl::institutionId($user)) {
+                Response::notFound('Event not found');
+                return;
+            }
+
             if (!$this->canManageEvent($user, $event)) {
                 Response::forbidden('You can only delete events you created.');
                 return;
@@ -518,7 +581,11 @@ class EventController
     public function getByType(array $user, string $type): void
     {
         try {
-            $institutionId = $_GET['institution_id'] ?? null;
+            if (AccessControl::isSuperAdmin($user) && isset($_GET['institution_id']) && $_GET['institution_id'] !== '') {
+                $institutionId = (int) $_GET['institution_id'];
+            } else {
+                $institutionId = AccessControl::institutionId($user);
+            }
             $limit = $_GET['limit'] ?? 50;
             $publishedOnly = !empty($_GET['published_only']);
 
@@ -540,7 +607,11 @@ class EventController
     public function getAcademicCalendar(array $user): void
     {
         try {
-            $institutionId = $_GET['institution_id'] ?? null;
+            if (AccessControl::isSuperAdmin($user) && isset($_GET['institution_id']) && $_GET['institution_id'] !== '') {
+                $institutionId = (int) $_GET['institution_id'];
+            } else {
+                $institutionId = AccessControl::institutionId($user);
+            }
             $academicYearId = $_GET['academic_year_id'] ?? null;
             $publishedOnly = !empty($_GET['published_only']);
 

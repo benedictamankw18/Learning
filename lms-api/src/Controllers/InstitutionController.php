@@ -5,6 +5,7 @@ namespace App\Controllers;
 use App\Utils\Response;
 use App\Utils\Validator;
 use App\Utils\UuidHelper;
+use App\Security\AccessControl;
 use App\Repositories\InstitutionRepository;
 use App\Repositories\NotificationRepository;
 use App\Middleware\RoleMiddleware;
@@ -144,15 +145,15 @@ class InstitutionController
             return;
         }
 
-        $roleMiddleware = new RoleMiddleware($user);
         // Super admin may view any institution; regular admin limited to their own
-        if ($user['role'] !== 'super_admin') {
-            if (!$roleMiddleware->requireRole('admin')) {
+        if (!AccessControl::isSuperAdmin($user)) {
+            if (!AccessControl::isAdmin($user)) {
+                Response::forbidden('Admin access required');
                 return;
             }
 
-            if ($institution['institution_id'] != $user['institution_id']) {
-                Response::forbidden('You can only view your own institution');
+            if (!AccessControl::sameInstitution($user, $institution)) {
+                Response::error('Institution not found', 404);
                 return;
             }
         }
@@ -237,17 +238,16 @@ class InstitutionController
             return;
         }
 
-        $roleMiddleware = new RoleMiddleware($user);
-
         // Super admin can update any institution
         // Regular admin can only update their own institution
-        if ($user['role'] !== 'super_admin') {
-            if (!$roleMiddleware->requireRole('admin')) {
+        if (!AccessControl::isSuperAdmin($user)) {
+            if (!AccessControl::isAdmin($user)) {
+                Response::forbidden('Admin access required');
                 return;
             }
 
-            if ($institution['institution_id'] != $user['institution_id']) {
-                Response::forbidden('You can only update your own institution');
+            if (!AccessControl::sameInstitution($user, $institution)) {
+                Response::error('Institution not found', 404);
                 return;
             }
         }
@@ -350,14 +350,14 @@ class InstitutionController
         }
 
         // Super admin may view statistics for any institution; regular admin limited to their own
-        if ($user['role'] !== 'super_admin') {
-            $roleMiddleware = new RoleMiddleware($user);
-            if (!$roleMiddleware->requireRole('admin')) {
+        if (!AccessControl::isSuperAdmin($user)) {
+            if (!AccessControl::isAdmin($user)) {
+                Response::forbidden('Admin access required');
                 return;
             }
 
-            if ($institution['institution_id'] != $user['institution_id']) {
-                Response::forbidden('You can only view your own institution statistics');
+            if (!AccessControl::sameInstitution($user, $institution)) {
+                Response::error('Institution not found', 404);
                 return;
             }
         }
@@ -385,16 +385,16 @@ class InstitutionController
             return;
         }
 
-        $roleMiddleware = new RoleMiddleware($user);
         // Super admin may view users for any institution; regular admin limited to their own
-        if ($user['role'] !== 'super_admin') {
+        if (!AccessControl::isSuperAdmin($user)) {
             // Regular admin can only view their own institution's users
-            if (!$roleMiddleware->requireRole('admin')) {
+            if (!AccessControl::isAdmin($user)) {
+                Response::forbidden('Admin access required');
                 return;
             }
 
-            if ($institution['institution_id'] != $user['institution_id']) {
-                Response::forbidden('You can only view your own institution users');
+            if (!AccessControl::sameInstitution($user, $institution)) {
+                Response::error('Institution not found', 404);
                 return;
             }
         }
@@ -435,8 +435,9 @@ class InstitutionController
         }
 
         // Check authorization: super_admin may access any, others only their own
-        if ($user['role'] !== 'super_admin' && $institution['institution_id'] != $user['institution_id']) {
-            Response::forbidden('You do not have access to this institution');
+        if (!AccessControl::isSuperAdmin($user)
+            && !AccessControl::sameInstitution($user, $institution)) {
+            Response::error('Institution not found', 404);
             return;
         }
 
@@ -464,8 +465,9 @@ class InstitutionController
         }
 
         // Check authorization: super_admin may access any, others only their own
-        if ($user['role'] !== 'super_admin' && $institution['institution_id'] != $user['institution_id']) {
-            Response::forbidden('You do not have access to this institution');
+        if (!AccessControl::isSuperAdmin($user)
+            && !AccessControl::sameInstitution($user, $institution)) {
+            Response::error('Institution not found', 404);
             return;
         }
 
@@ -512,6 +514,11 @@ class InstitutionController
 
         $data = json_decode(file_get_contents('php://input'), true);
 
+        if (!is_array($data)) {
+            Response::error('Invalid JSON payload', 400);
+            return;
+        }
+
         $validator = new Validator($data);
         $validator->required(['status'])->in('status', ['active', 'inactive', 'suspended']);
 
@@ -552,14 +559,14 @@ class InstitutionController
             return;
         }
 
-        // Authorization: super_admin may view only institutions that have admin users; admin can view own institution only
-        if ($user['role'] === 'super_admin') {
+        // Authorization: super_admin may view only institutions that have admin users; others may view their own institution only
+        if (AccessControl::isSuperAdmin($user)) {
             if (!$this->repo->hasAdminUsers($institution['institution_id'])) {
                 Response::forbidden('You do not have access to this institution\'s settings');
                 return;
             }
-        } elseif ($institution['institution_id'] != $user['institution_id']) {
-            Response::forbidden('You do not have access to this institution\'s settings');
+        } elseif (!AccessControl::sameInstitution($user, $institution)) {
+            Response::error('Institution not found', 404);
             return;
         }
 
@@ -595,18 +602,30 @@ class InstitutionController
             return;
         }
 
-        // Authorization: super_admin may update only institutions that have admin users, admin can update own institution only
-        if ($user['role'] === 'super_admin') {
+        // Authorization: super_admin may update only institutions that have admin users; admins may update their own institution only
+        if (AccessControl::isSuperAdmin($user)) {
             if (!$this->repo->hasAdminUsers($institution['institution_id'])) {
                 Response::forbidden('You do not have access to update this institution\'s settings');
                 return;
             }
-        } elseif ($institution['institution_id'] != $user['institution_id']) {
-            Response::forbidden('You do not have access to update this institution\'s settings');
-            return;
+        } else {
+            if (!AccessControl::isAdmin($user)) {
+                Response::forbidden('Admin access required');
+                return;
+            }
+
+            if (!AccessControl::sameInstitution($user, $institution)) {
+                Response::error('Institution not found', 404);
+                return;
+            }
         }
 
         $data = json_decode(file_get_contents('php://input'), true);
+
+        if (!is_array($data)) {
+            Response::error('Invalid JSON payload', 400);
+            return;
+        }
 
         $validator = new Validator($data);
         $validator->max('school_name', 200)
@@ -666,13 +685,13 @@ class InstitutionController
             return;
         }
 
-        if ($user['role'] === 'super_admin') {
+        if (AccessControl::isSuperAdmin($user)) {
             if (!$this->repo->hasAdminUsers($institution['institution_id'])) {
                 Response::forbidden('You do not have access to this institution\'s settings');
                 return;
             }
-        } elseif ($institution['institution_id'] != $user['institution_id']) {
-            Response::forbidden('You do not have access to this institution\'s settings');
+        } elseif (!AccessControl::sameInstitution($user, $institution)) {
+            Response::error('Institution not found', 404);
             return;
         }
 
@@ -708,14 +727,21 @@ class InstitutionController
             return;
         }
 
-        if ($user['role'] === 'super_admin') {
+        if (AccessControl::isSuperAdmin($user)) {
             if (!$this->repo->hasAdminUsers($institution['institution_id'])) {
                 Response::forbidden('You do not have access to update this institution\'s settings');
                 return;
             }
-        } elseif ($institution['institution_id'] != $user['institution_id']) {
-            Response::forbidden('You do not have access to update this institution\'s settings');
-            return;
+        } else {
+            if (!AccessControl::isAdmin($user)) {
+                Response::forbidden('Admin access required');
+                return;
+            }
+
+            if (!AccessControl::sameInstitution($user, $institution)) {
+                Response::error('Institution not found', 404);
+                return;
+            }
         }
 
         $data = json_decode(file_get_contents('php://input'), true);
@@ -774,13 +800,13 @@ class InstitutionController
             return;
         }
 
-        if ($user['role'] === 'super_admin') {
+        if (AccessControl::isSuperAdmin($user)) {
             if (!$this->repo->hasAdminUsers($institution['institution_id'])) {
                 Response::forbidden('You do not have access to this institution\'s settings');
                 return;
             }
-        } elseif ($institution['institution_id'] != $user['institution_id']) {
-            Response::forbidden('You do not have access to this institution\'s settings');
+        } elseif (!AccessControl::sameInstitution($user, $institution)) {
+            Response::error('Institution not found', 404);
             return;
         }
 
@@ -816,14 +842,21 @@ class InstitutionController
             return;
         }
 
-        if ($user['role'] === 'super_admin') {
+        if (AccessControl::isSuperAdmin($user)) {
             if (!$this->repo->hasAdminUsers($institution['institution_id'])) {
                 Response::forbidden('You do not have access to update this institution\'s settings');
                 return;
             }
-        } elseif ($institution['institution_id'] != $user['institution_id']) {
-            Response::forbidden('You do not have access to update this institution\'s settings');
-            return;
+        } else {
+            if (!AccessControl::isAdmin($user)) {
+                Response::forbidden('Admin access required');
+                return;
+            }
+
+            if (!AccessControl::sameInstitution($user, $institution)) {
+                Response::error('Institution not found', 404);
+                return;
+            }
         }
 
         $data = json_decode(file_get_contents('php://input'), true);

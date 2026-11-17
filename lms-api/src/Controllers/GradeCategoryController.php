@@ -4,6 +4,7 @@ namespace App\Controllers;
 
 use App\Middleware\RoleMiddleware;
 use App\Repositories\GradeCategoryRepository;
+use App\Security\AccessControl;
 use App\Utils\Response;
 use App\Utils\Validator;
 
@@ -18,15 +19,41 @@ class GradeCategoryController
 
     public function index(array $user): void
     {
-        $institutionId = $user['role'] === 'super_admin' ? null : (int) ($user['institution_id'] ?? 0);
-        $rows = $this->repo->getAll($institutionId > 0 ? $institutionId : null);
+        $roleMiddleware = new RoleMiddleware($user);
+        if (!$roleMiddleware->requireRole(['admin', 'teacher', 'super_admin'])) {
+            return;
+        }
+
+        $institutionId = null;
+        if (!AccessControl::isSuperAdmin($user)) {
+            $institutionId = AccessControl::institutionId($user);
+            if ($institutionId <= 0) {
+                Response::forbidden('Institution context is required');
+                return;
+            }
+        }
+
+        $rows = $this->repo->getAll($institutionId);
         Response::success($rows);
     }
 
     public function show(array $user, int $id): void
     {
-        $institutionId = $user['role'] === 'super_admin' ? null : (int) ($user['institution_id'] ?? 0);
-        $row = $this->repo->findById($id, $institutionId > 0 ? $institutionId : null);
+        $roleMiddleware = new RoleMiddleware($user);
+        if (!$roleMiddleware->requireRole(['admin', 'teacher', 'super_admin'])) {
+            return;
+        }
+
+        $institutionId = null;
+        if (!AccessControl::isSuperAdmin($user)) {
+            $institutionId = AccessControl::institutionId($user);
+            if ($institutionId <= 0) {
+                Response::forbidden('Institution context is required');
+                return;
+            }
+        }
+
+        $row = $this->repo->findById($id, $institutionId);
 
         if (!$row) {
             Response::notFound('Grade category not found');
@@ -73,8 +100,10 @@ class GradeCategoryController
             return;
         }
 
-        if ($user['role'] !== 'super_admin') {
-            $data['institution_id'] = (int) $user['institution_id'];
+        if (!AccessControl::isSuperAdmin($user)) {
+            $data['institution_id'] = AccessControl::institutionId($user);
+        } elseif (isset($data['institution_id'])) {
+            $data['institution_id'] = (int) $data['institution_id'];
         }
 
         if (empty($data['institution_id'])) {
@@ -105,8 +134,16 @@ class GradeCategoryController
             return;
         }
 
-        $institutionId = $user['role'] === 'super_admin' ? null : (int) ($user['institution_id'] ?? 0);
-        $row = $this->repo->findById($id, $institutionId > 0 ? $institutionId : null);
+        $institutionId = null;
+        if (!AccessControl::isSuperAdmin($user)) {
+            $institutionId = AccessControl::institutionId($user);
+            if ($institutionId <= 0) {
+                Response::forbidden('Institution context is required');
+                return;
+            }
+        }
+
+        $row = $this->repo->findById($id, $institutionId);
 
         if (!$row) {
             Response::notFound('Grade category not found');
@@ -171,15 +208,23 @@ class GradeCategoryController
             return;
         }
 
-        $institutionId = $user['role'] === 'super_admin' ? null : (int) ($user['institution_id'] ?? 0);
-        $row = $this->repo->findById($id, $institutionId > 0 ? $institutionId : null);
+        $institutionId = null;
+        if (!AccessControl::isSuperAdmin($user)) {
+            $institutionId = AccessControl::institutionId($user);
+            if ($institutionId <= 0) {
+                Response::forbidden('Institution context is required');
+                return;
+            }
+        }
+
+        $row = $this->repo->findById($id, $institutionId);
 
         if (!$row) {
             Response::notFound('Grade category not found');
             return;
         }
 
-        if (!$this->repo->delete($id, $institutionId > 0 ? $institutionId : null)) {
+        if (!$this->repo->delete($id, $institutionId)) {
             Response::serverError('Failed to delete grade category');
             return;
         }

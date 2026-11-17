@@ -4,6 +4,7 @@ namespace App\Controllers;
 
 use App\Utils\Response;
 use App\Config\Database;
+use App\Security\AccessControl;
 use App\Repositories\InstitutionRepository;
 use App\Repositories\SubscriptionRepository;
 use App\Repositories\UserRepository;
@@ -225,11 +226,21 @@ class DashboardController
      */
     public function adminStats(array $user): void
     {
-        // Allow institution_id from query params (for superadmin) or from user context
-        $institutionId = isset($_GET['institution_id']) ? (int) $_GET['institution_id'] : $user['institution_id'];
+        if (!AccessControl::isAdmin($user) && !AccessControl::isSuperAdmin($user)) {
+            Response::forbidden('Admin access required');
+            return;
+        }
 
-        if (!$institutionId) {
-            Response::badRequest('Institution ID required. Please provide institution_id as a query parameter.');
+        // Institution admins are confined to their own institution. Super admins
+        // may select one explicitly.
+        if (AccessControl::isSuperAdmin($user)) {
+            $institutionId = isset($_GET['institution_id']) ? (int) $_GET['institution_id'] : AccessControl::institutionId($user);
+        } else {
+            $institutionId = AccessControl::institutionId($user);
+        }
+
+        if ($institutionId <= 0) {
+            Response::forbidden('Admin institution context is required');
             return;
         }
 

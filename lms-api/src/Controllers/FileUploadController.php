@@ -3,6 +3,7 @@
 namespace App\Controllers;
 
 use App\Utils\Response;
+use App\Security\AccessControl;
 
 class FileUploadController
 {
@@ -25,6 +26,93 @@ class FileUploadController
     }
 
     /**
+     * Resolve the institution that owns a new upload.
+     *
+     * Super admins must explicitly choose an institution; everyone else is
+     * pinned to the institution carried by their authenticated session.
+     */
+    private function resolveUploadInstitutionId(array $user): int
+    {
+        if (AccessControl::isSuperAdmin($user)) {
+            return isset($_POST['institution_id']) ? (int) $_POST['institution_id'] : 0;
+        }
+
+        return AccessControl::institutionId($user);
+    }
+
+    /**
+     * Check whether the actor may read a file stored for an institution.
+     */
+    private function canAccessInstitution(array $user, int $institutionId): bool
+    {
+        if ($institutionId <= 0) {
+            return false;
+        }
+
+        if (AccessControl::isSuperAdmin($user)) {
+            $requested = (int) ($_GET['institution_id'] ?? 0);
+            return $requested <= 0 || $requested === $institutionId;
+        }
+
+        return AccessControl::institutionId($user) === $institutionId;
+    }
+
+    /**
+     * Locate a stored file for the current actor.
+     *
+     * Tenant users can only resolve files inside their own institution
+     * directory. Super admins may target an institution explicitly or search
+     * across institutions, and may still read legacy flat files.
+     */
+    private function findFile(array $user, string $category, string $filename, ?string $subdir = null): ?string
+    {
+        $relative = $category . '/' . ($subdir !== null ? $subdir . '/' : '') . $filename;
+
+        if (AccessControl::isSuperAdmin($user)) {
+            $requested = (int) ($_GET['institution_id'] ?? 0);
+            if ($requested > 0) {
+                $candidate = $this->uploadPath . $requested . '/' . $relative;
+                return is_file($candidate) ? $candidate : null;
+            }
+
+            foreach (scandir($this->uploadPath) ?: [] as $entry) {
+                if ($entry === '.' || $entry === '..' || !ctype_digit($entry)) {
+                    continue;
+                }
+                $candidate = $this->uploadPath . $entry . '/' . $relative;
+                if (is_file($candidate)) {
+                    return $candidate;
+                }
+            }
+
+            // Legacy flat file (pre multi-tenant uploads).
+            $legacy = $this->uploadPath . $relative;
+            return is_file($legacy) ? $legacy : null;
+        }
+
+        $institutionId = AccessControl::institutionId($user);
+        if ($institutionId <= 0) {
+            return null;
+        }
+
+        $candidate = $this->uploadPath . $institutionId . '/' . $relative;
+        return is_file($candidate) ? $candidate : null;
+    }
+
+    /**
+     * Stream a resolved file to the client.
+     */
+    private function streamFile(string $filePath): void
+    {
+        $mimeType = mime_content_type($filePath) ?: 'application/octet-stream';
+        header('Content-Type: ' . $mimeType);
+        header('Content-Length: ' . filesize($filePath));
+        header('Cache-Control: private, max-age=86400');
+        readfile($filePath);
+        exit;
+    }
+
+    /**
      * Upload single file
      * POST /upload
      */
@@ -37,9 +125,15 @@ class FileUploadController
             }
 
             $file = $_FILES['file'];
-            $category = $_POST['category'] ?? 'general';
-            $institutionId = $_POST['institution_id'] ?? null;
+            $category = preg_replace('/[^a-zA-Z0-9_-]/', '', (string) ($_POST['category'] ?? 'general')) ?: 'general';
             $userId = $user['user_id'] ?? null;
+
+            // Resolve and require an institution for every stored upload.
+            $institutionId = $this->resolveUploadInstitutionId($user);
+            if ($institutionId <= 0) {
+                Response::error('Institution context is required', 400);
+                return;
+            }
 
             // Validate file
             $validation = $this->validateFile($file);
@@ -52,8 +146,8 @@ class FileUploadController
             $ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
             $filename = uniqid() . '_' . time() . '.' . $ext;
 
-            // Determine upload path
-            $categoryPath = $this->uploadPath . $category . '/';
+            // Determine upload path (institution scoped)
+            $categoryPath = $this->uploadPath . $institutionId . '/' . $category . '/';
             if (!file_exists($categoryPath)) {
                 mkdir($categoryPath, 0777, true);
             }
@@ -70,14 +164,14 @@ class FileUploadController
             $fileData = [
                 'original_name' => $file['name'],
                 'filename' => $filename,
-                'path' => str_replace($this->uploadPath, '', $filePath),
+                'path' => $institutionId . '/' . $category . '/' . $filename,
                 'size' => $file['size'],
                 'type' => $file['type'],
                 'extension' => $ext,
                 'category' => $category,
                 'institution_id' => $institutionId,
                 'uploaded_by' => $userId,
-                'url' => '/uploads/' . $category . '/' . $filename,
+                'url' => '/uploads/' . $institutionId . '/' . $category . '/' . $filename,
                 'api_url' => '/api/upload/' . $category . '/' . $filename
             ];
 
@@ -100,9 +194,14 @@ class FileUploadController
             }
 
             $files = $_FILES['files'];
-            $category = $_POST['category'] ?? 'general';
-            $institutionId = $_POST['institution_id'] ?? null;
+            $category = preg_replace('/[^a-zA-Z0-9_-]/', '', (string) ($_POST['category'] ?? 'general')) ?: 'general';
             $userId = $user['user_id'] ?? null;
+
+            $institutionId = $this->resolveUploadInstitutionId($user);
+            if ($institutionId <= 0) {
+                Response::error('Institution context is required', 400);
+                return;
+            }
 
             $uploadedFiles = [];
             $errors = [];
@@ -131,8 +230,8 @@ class FileUploadController
                 $ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
                 $filename = uniqid() . '_' . time() . '_' . $i . '.' . $ext;
 
-                // Determine upload path
-                $categoryPath = $this->uploadPath . $category . '/';
+                // Determine upload path (institution scoped)
+                $categoryPath = $this->uploadPath . $institutionId . '/' . $category . '/';
                 if (!file_exists($categoryPath)) {
                     mkdir($categoryPath, 0777, true);
                 }
@@ -144,12 +243,14 @@ class FileUploadController
                     $uploadedFiles[] = [
                         'original_name' => $file['name'],
                         'filename' => $filename,
-                        'path' => str_replace($this->uploadPath, '', $filePath),
+                        'path' => $institutionId . '/' . $category . '/' . $filename,
                         'size' => $file['size'],
                         'type' => $file['type'],
                         'extension' => $ext,
                         'category' => $category,
-                        'url' => '/uploads/' . $category . '/' . $filename,
+                        'institution_id' => $institutionId,
+                        'uploaded_by' => $userId,
+                        'url' => '/uploads/' . $institutionId . '/' . $category . '/' . $filename,
                         'api_url' => '/api/upload/' . $category . '/' . $filename
                     ];
                 } else {
@@ -176,11 +277,16 @@ class FileUploadController
     public function delete(array $user, string $category, string $filename): void
     {
         try {
+            if (!AccessControl::isAdmin($user) && !AccessControl::isSuperAdmin($user)) {
+                Response::forbidden('Admin access required');
+                return;
+            }
+
             $safeCategory = preg_replace('/[^a-zA-Z0-9_-]/', '', $category);
             $safeFilename = basename($filename);
-            $filePath = $this->uploadPath . $safeCategory . '/' . $safeFilename;
+            $filePath = $this->findFile($user, $safeCategory, $safeFilename);
 
-            if (!file_exists($filePath)) {
+            if ($filePath === null) {
                 Response::notFound('File not found');
                 return;
             }
@@ -262,23 +368,30 @@ class FileUploadController
     public function getFileInfo(array $user, string $category, string $filename): void
     {
         try {
+            if (!AccessControl::isAdmin($user) && !AccessControl::isSuperAdmin($user)) {
+                Response::forbidden('Admin access required');
+                return;
+            }
+
             $safeCategory = preg_replace('/[^a-zA-Z0-9_-]/', '', $category);
             $safeFilename = basename($filename);
-            $filePath = $this->uploadPath . $safeCategory . '/' . $safeFilename;
+            $filePath = $this->findFile($user, $safeCategory, $safeFilename);
 
-            if (!file_exists($filePath)) {
+            if ($filePath === null) {
                 Response::notFound('File not found');
                 return;
             }
 
+            $relativePath = str_replace('\\', '/', substr($filePath, strlen($this->uploadPath)));
+
             $info = [
                 'filename' => $safeFilename,
-                'path' => $safeCategory . '/' . $safeFilename,
+                'path' => $relativePath,
                 'size' => filesize($filePath),
                 'type' => mime_content_type($filePath),
                 'extension' => pathinfo($safeFilename, PATHINFO_EXTENSION),
                 'category' => $safeCategory,
-                'url' => '/uploads/' . $safeCategory . '/' . $safeFilename,
+                'url' => '/uploads/' . $relativePath,
                 'api_url' => '/api/upload/' . $safeCategory . '/' . $safeFilename,
                 'created_at' => date('Y-m-d H:i:s', filectime($filePath)),
                 'modified_at' => date('Y-m-d H:i:s', filemtime($filePath))
@@ -294,24 +407,19 @@ class FileUploadController
      * Serve uploaded file bytes
      * GET /upload/{category}/{filename}
      */
-    public function serve(string $category, string $filename): void
+    public function serve(array $user, string $category, string $filename): void
     {
         try {
             $safeCategory = preg_replace('/[^a-zA-Z0-9_-]/', '', $category);
             $safeFilename = basename($filename);
-            $filePath = $this->uploadPath . $safeCategory . '/' . $safeFilename;
+            $filePath = $this->findFile($user, $safeCategory, $safeFilename);
 
-            if (!file_exists($filePath) || !is_file($filePath)) {
+            if ($filePath === null) {
                 Response::notFound('File not found');
                 return;
             }
 
-            $mimeType = mime_content_type($filePath) ?: 'application/octet-stream';
-            header('Content-Type: ' . $mimeType);
-            header('Content-Length: ' . filesize($filePath));
-            header('Cache-Control: public, max-age=86400');
-            readfile($filePath);
-            exit;
+            $this->streamFile($filePath);
         } catch (\Exception $e) {
             Response::serverError('Failed to serve file: ' . $e->getMessage());
         }
@@ -321,25 +429,39 @@ class FileUploadController
      * Serve uploaded file bytes for one-level nested folders
      * GET /upload/{category}/{subdir}/{filename}
      */
-    public function serveNested(string $category, string $subdir, string $filename): void
+    public function serveNested(array $user, string $category, string $subdir, string $filename): void
     {
         try {
             $safeCategory = preg_replace('/[^a-zA-Z0-9_-]/', '', $category);
             $safeSubdir = preg_replace('/[^a-zA-Z0-9_-]/', '', $subdir);
             $safeFilename = basename($filename);
-            $filePath = $this->uploadPath . $safeCategory . '/' . $safeSubdir . '/' . $safeFilename;
 
-            if (!file_exists($filePath) || !is_file($filePath)) {
+            // New scoped URLs use /api/upload/<institution_id>/<category>/<filename>.
+            if ($safeCategory !== '' && ctype_digit($safeCategory)) {
+                $pathInstitutionId = (int) $safeCategory;
+                if (!$this->canAccessInstitution($user, $pathInstitutionId)) {
+                    Response::notFound('File not found');
+                    return;
+                }
+
+                $filePath = $this->uploadPath . $pathInstitutionId . '/' . $safeSubdir . '/' . $safeFilename;
+                if (!is_file($filePath)) {
+                    Response::notFound('File not found');
+                    return;
+                }
+
+                $this->streamFile($filePath);
+                return;
+            }
+
+            $filePath = $this->findFile($user, $safeCategory, $safeFilename, $safeSubdir);
+
+            if ($filePath === null) {
                 Response::notFound('File not found');
                 return;
             }
 
-            $mimeType = mime_content_type($filePath) ?: 'application/octet-stream';
-            header('Content-Type: ' . $mimeType);
-            header('Content-Length: ' . filesize($filePath));
-            header('Cache-Control: public, max-age=86400');
-            readfile($filePath);
-            exit;
+            $this->streamFile($filePath);
         } catch (\Exception $e) {
             Response::serverError('Failed to serve file: ' . $e->getMessage());
         }

@@ -6,8 +6,11 @@ use App\Repositories\GradeReportRepository;
 use App\Repositories\NotificationRepository;
 use App\Repositories\StudentRepository;
 use App\Repositories\ResultRepository;
+use App\Repositories\ClassRepository;
 use App\Utils\Response;
 use App\Utils\UuidHelper;
+use App\Security\AccessControl;
+use App\Middleware\AuthorizationMiddleware;
 
 class GradeReportController
 {
@@ -15,6 +18,7 @@ class GradeReportController
     private $notificationRepository;
     private $studentRepository;
     private $resultRepository;
+    private $classRepository;
 
     public function __construct()
     {
@@ -22,6 +26,7 @@ class GradeReportController
         $this->notificationRepository = new NotificationRepository();
         $this->studentRepository = new StudentRepository();
         $this->resultRepository = new ResultRepository();
+        $this->classRepository = new ClassRepository();
     }
 
     private function notifyReportPublished(array $report, array $actor = []): void
@@ -176,6 +181,13 @@ class GradeReportController
      */
     public function index(array $user): void
     {
+        if (!AccessControl::isAdmin($user)
+            && !AccessControl::isSuperAdmin($user)
+            && !AccessControl::hasRole($user, 'teacher')) {
+            Response::forbidden('You do not have permission to view grade reports');
+            return;
+        }
+
         try {
             $studentId = $_GET['student_id'] ?? null;
             $classId = $_GET['class_id'] ?? null;
@@ -200,6 +212,12 @@ class GradeReportController
                 $filters['generated_by'] = $generatedBy;
             if ($hasFeedback !== null && $hasFeedback !== '')
                 $filters['has_feedback'] = $hasFeedback;
+
+            if (AccessControl::isSuperAdmin($user) && isset($_GET['institution_id']) && $_GET['institution_id'] !== '') {
+                $filters['institution_id'] = (int) $_GET['institution_id'];
+            } elseif (!AccessControl::isSuperAdmin($user)) {
+                $filters['institution_id'] = AccessControl::institutionId($user);
+            }
 
             $reports = $this->gradeReportRepository->getAll($filters, $limit, $offset);
             $total = $this->gradeReportRepository->count($filters);
@@ -234,6 +252,19 @@ class GradeReportController
             $report = $this->gradeReportRepository->findByUuid($sanitizedUuid);
 
             if (!$report) {
+                Response::notFound('Grade report not found');
+                return;
+            }
+
+            if (!AccessControl::isSuperAdmin($user)
+                && !AccessControl::isAdmin($user)
+                && !AccessControl::hasRole($user, 'teacher')) {
+                Response::forbidden('You do not have permission to view grade reports');
+                return;
+            }
+
+            if (!AccessControl::isSuperAdmin($user)
+                && AccessControl::institutionId($report) !== AccessControl::institutionId($user)) {
                 Response::notFound('Grade report not found');
                 return;
             }
@@ -280,6 +311,19 @@ class GradeReportController
                 return;
             }
 
+            if (!AccessControl::isSuperAdmin($user)
+                && !AccessControl::isAdmin($user)
+                && !AccessControl::hasRole($user, 'teacher')) {
+                Response::forbidden('You do not have permission to generate grade reports');
+                return;
+            }
+
+            if (!AccessControl::isSuperAdmin($user)
+                && AccessControl::institutionId($student) !== AccessControl::institutionId($user)) {
+                Response::notFound('Student not found');
+                return;
+            }
+
             // Generate report
             $reportId = $this->gradeReportRepository->generateReport(
                 $data['student_id'],
@@ -307,6 +351,30 @@ class GradeReportController
         try {
             $semesterId = $_GET['semester_id'] ?? null;
             $academicYearId = $_GET['academic_year_id'] ?? null;
+
+            $student = $this->studentRepository->findById($studentId);
+            if (!$student) {
+                Response::notFound('Student not found');
+                return;
+            }
+
+            if (AccessControl::isSuperAdmin($user)
+                || AccessControl::isAdmin($user)
+                || AccessControl::hasRole($user, 'teacher')) {
+                if (!AccessControl::isSuperAdmin($user)
+                    && AccessControl::institutionId($student) !== AccessControl::institutionId($user)) {
+                    Response::notFound('Student not found');
+                    return;
+                }
+            } elseif (AccessControl::hasRole($user, 'student')) {
+                if ((int) ($student['user_id'] ?? 0) !== (int) ($user['user_id'] ?? 0)) {
+                    Response::forbidden('You can only view your own report card');
+                    return;
+                }
+            } else {
+                Response::forbidden('You do not have permission to view report cards');
+                return;
+            }
 
             $reportCard = $this->gradeReportRepository->getReportCard(
                 $studentId,
@@ -350,6 +418,30 @@ class GradeReportController
                 && in_array(strtolower((string) $_GET['all_terms']), ['1', 'true', 'yes'], true);
             $academicYearId = $allTerms ? null : ($_GET['academic_year_id'] ?? null);
 
+            $student = $this->studentRepository->findById($studentId);
+            if (!$student) {
+                Response::notFound('Student not found');
+                return;
+            }
+
+            if (AccessControl::isSuperAdmin($user)
+                || AccessControl::isAdmin($user)
+                || AccessControl::hasRole($user, 'teacher')) {
+                if (!AccessControl::isSuperAdmin($user)
+                    && AccessControl::institutionId($student) !== AccessControl::institutionId($user)) {
+                    Response::notFound('Student not found');
+                    return;
+                }
+            } elseif (AccessControl::hasRole($user, 'student')) {
+                if ((int) ($student['user_id'] ?? 0) !== (int) ($user['user_id'] ?? 0)) {
+                    Response::forbidden('You can only view your own transcript');
+                    return;
+                }
+            } else {
+                Response::forbidden('You do not have permission to view transcripts');
+                return;
+            }
+
             $transcript = $this->gradeReportRepository->getTranscript($studentId, $academicYearId);
 
             Response::success($transcript);
@@ -375,6 +467,19 @@ class GradeReportController
 
             $report = $this->gradeReportRepository->findByUuid($sanitizedUuid);
             if (!$report) {
+                Response::notFound('Grade report not found');
+                return;
+            }
+
+            if (!AccessControl::isSuperAdmin($user)
+                && !AccessControl::isAdmin($user)
+                && !AccessControl::hasRole($user, 'teacher')) {
+                Response::forbidden('You do not have permission to update grade reports');
+                return;
+            }
+
+            if (!AccessControl::isSuperAdmin($user)
+                && AccessControl::institutionId($report) !== AccessControl::institutionId($user)) {
                 Response::notFound('Grade report not found');
                 return;
             }
@@ -420,6 +525,19 @@ class GradeReportController
                 return;
             }
 
+            if (!AccessControl::isSuperAdmin($user)
+                && !AccessControl::isAdmin($user)
+                && !AccessControl::hasRole($user, 'teacher')) {
+                Response::forbidden('You do not have permission to delete grade reports');
+                return;
+            }
+
+            if (!AccessControl::isSuperAdmin($user)
+                && AccessControl::institutionId($report) !== AccessControl::institutionId($user)) {
+                Response::notFound('Grade report not found');
+                return;
+            }
+
             $reportId = $report['report_id'];
 
             $this->gradeReportRepository->delete($reportId);
@@ -452,6 +570,19 @@ class GradeReportController
                 return;
             }
 
+            if (!AccessControl::isSuperAdmin($user)
+                && !AccessControl::isAdmin($user)
+                && !AccessControl::hasRole($user, 'teacher')) {
+                Response::forbidden('You do not have permission to publish grade reports');
+                return;
+            }
+
+            if (!AccessControl::isSuperAdmin($user)
+                && AccessControl::institutionId($report) !== AccessControl::institutionId($user)) {
+                Response::notFound('Grade report not found');
+                return;
+            }
+
             $reportId = $report['report_id'];
 
             $wasPublished = (int) ($report['is_published'] ?? 0);
@@ -480,6 +611,25 @@ class GradeReportController
         try {
             $semesterId = $_GET['semester_id'] ?? null;
             $academicYearId = $_GET['academic_year_id'] ?? null;
+
+            if (!AccessControl::isSuperAdmin($user)
+                && !AccessControl::isAdmin($user)
+                && !AccessControl::hasRole($user, 'teacher')) {
+                Response::forbidden('You do not have permission to view class reports');
+                return;
+            }
+
+            $class = $this->classRepository->findById($classId);
+            if (!$class) {
+                Response::notFound('Class not found');
+                return;
+            }
+
+            if (!AccessControl::isSuperAdmin($user)
+                && AccessControl::institutionId($class) !== AccessControl::institutionId($user)) {
+                Response::notFound('Class not found');
+                return;
+            }
 
             $reports = $this->gradeReportRepository->getClassReports(
                 $classId,
@@ -516,6 +666,25 @@ class GradeReportController
                 return;
             }
 
+            if (!AccessControl::isSuperAdmin($user)
+                && !AccessControl::isAdmin($user)
+                && !AccessControl::hasRole($user, 'teacher')) {
+                Response::forbidden('You do not have permission to bulk generate grade reports');
+                return;
+            }
+
+            $class = $this->classRepository->findById((int) $data['class_id']);
+            if (!$class) {
+                Response::notFound('Class not found');
+                return;
+            }
+
+            if (!AccessControl::isSuperAdmin($user)
+                && AccessControl::institutionId($class) !== AccessControl::institutionId($user)) {
+                Response::notFound('Class not found');
+                return;
+            }
+
             $generatedCount = $this->gradeReportRepository->bulkGenerateForClass(
                 $data['class_id'],
                 $data['semester_id'],
@@ -536,7 +705,19 @@ class GradeReportController
     public function getStatistics(array $user): void
     {
         try {
-            $institutionId = $_GET['institution_id'] ?? null;
+            if (!AccessControl::isSuperAdmin($user)
+                && !AccessControl::isAdmin($user)
+                && !AccessControl::hasRole($user, 'teacher')) {
+                Response::forbidden('You do not have permission to view grade report statistics');
+                return;
+            }
+
+            if (AccessControl::isSuperAdmin($user) && isset($_GET['institution_id']) && $_GET['institution_id'] !== '') {
+                $institutionId = (int) $_GET['institution_id'];
+            } else {
+                $institutionId = AccessControl::institutionId($user);
+            }
+
             $semesterId = $_GET['semester_id'] ?? null;
             $academicYearId = $_GET['academic_year_id'] ?? null;
 

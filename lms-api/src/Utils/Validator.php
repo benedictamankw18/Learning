@@ -7,9 +7,13 @@ class Validator
     private array $errors = [];
     private array $data;
 
-    public function __construct(array $data)
+    /**
+     * Accept mixed input so malformed JSON bodies (json_decode returns null)
+     * surface as validation errors instead of an uncaught TypeError.
+     */
+    public function __construct($data)
     {
-        $this->data = $data;
+        $this->data = is_array($data) ? $data : [];
     }
 
     public function required(array $fields): self

@@ -8,19 +8,23 @@ use App\Utils\UuidHelper;
 use App\Repositories\StudentRepository;
 use App\Repositories\UserRepository;
 use App\Repositories\ClassRepository;
+use App\Repositories\CourseRepository;
 use App\Middleware\RoleMiddleware;
+use App\Security\AccessControl;
 
 class StudentController
 {
     private StudentRepository $studentRepo;
     private UserRepository $userRepo;
     private ClassRepository $classRepo;
+    private CourseRepository $courseRepo;
 
     public function __construct()
     {
         $this->studentRepo = new StudentRepository();
         $this->userRepo    = new UserRepository();
         $this->classRepo   = new ClassRepository();
+        $this->courseRepo  = new CourseRepository();
     }
 
     public function index(array $user): void
@@ -77,8 +81,9 @@ class StudentController
         }
 
         // Multi-tenant check
-        if ($user['role'] !== 'super_admin' && (int) $student['institution_id'] !== (int) $user['institution_id']) {
-            Response::forbidden('Access denied');
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $student['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Student not found');
             return;
         }
 
@@ -128,8 +133,9 @@ class StudentController
             return;
         }
 
-        if ($user['role'] !== 'super_admin' && (int) $student['institution_id'] !== (int) $user['institution_id']) {
-            Response::forbidden('Access denied');
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $student['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Student not found');
             return;
         }
 
@@ -171,8 +177,16 @@ class StudentController
         }
 
         // Students can only view their own profile
-        if ($roleMiddleware->isStudent() && $student['user_id'] != $user['user_id']) {
+        if (AccessControl::hasRole($user, 'student') && (int) $student['user_id'] !== (int) $user['user_id']) {
             Response::forbidden('You can only view your own profile');
+            return;
+        }
+
+        // Admins and teachers are confined to their own institution.
+        if (!AccessControl::isSuperAdmin($user)
+            && AccessControl::hasRole($user, ['admin', 'teacher'])
+            && (int) $student['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Student not found');
             return;
         }
 
@@ -294,8 +308,16 @@ class StudentController
         $studentId = $student['student_id'];
 
         // Students can update their own profile, admins can update any
-        if (!$roleMiddleware->isAdmin() && $student['user_id'] != $user['user_id']) {
+        if (!AccessControl::isAdmin($user) && !AccessControl::isSuperAdmin($user)
+            && (int) $student['user_id'] !== (int) $user['user_id']) {
             Response::forbidden('You can only update your own profile');
+            return;
+        }
+
+        if (!AccessControl::isSuperAdmin($user)
+            && AccessControl::hasRole($user, ['admin', 'teacher'])
+            && (int) $student['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Student not found');
             return;
         }
 
@@ -363,8 +385,15 @@ class StudentController
         $studentId = $student['student_id'];
 
         // Students can only view their own courses
-        if ($roleMiddleware->isStudent() && $student['user_id'] != $user['user_id']) {
+        if (AccessControl::hasRole($user, 'student') && (int) $student['user_id'] !== (int) $user['user_id']) {
             Response::forbidden('You can only view your own courses');
+            return;
+        }
+
+        if (!AccessControl::isSuperAdmin($user)
+            && AccessControl::hasRole($user, ['admin', 'teacher'])
+            && (int) $student['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Student not found');
             return;
         }
 
@@ -397,8 +426,27 @@ class StudentController
         }
 
         // Students can enroll themselves, or admin can enroll any student
-        if (!$roleMiddleware->isAdmin() && $student['user_id'] != $user['user_id']) {
+        if (!AccessControl::isAdmin($user) && !AccessControl::isSuperAdmin($user)
+            && (int) $student['user_id'] !== (int) $user['user_id']) {
             Response::forbidden('You can only enroll yourself');
+            return;
+        }
+
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $student['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Student not found');
+            return;
+        }
+
+        $course = $this->courseRepo->findById((int) $data['course_id']);
+        if (!$course) {
+            Response::notFound('Course not found');
+            return;
+        }
+
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $course['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Course not found');
             return;
         }
 
@@ -429,7 +477,14 @@ class StudentController
         $studentId = $student['student_id'];
 
         // Only admin can unenroll students
-        if (!$roleMiddleware->requireRole('admin')) {
+        if (!AccessControl::isAdmin($user) && !AccessControl::isSuperAdmin($user)) {
+            Response::forbidden('Only admins can unenroll students');
+            return;
+        }
+
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $student['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Student not found');
             return;
         }
 
@@ -468,6 +523,12 @@ class StudentController
 
         $studentId = $student['student_id'];
 
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $student['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Student not found');
+            return;
+        }
+
         // Soft delete - set status to 'withdrawn'
         if ($this->studentRepo->update($studentId, ['status' => 'withdrawn'])) {
             Response::success(['message' => 'Student deactivated successfully']);
@@ -485,7 +546,9 @@ class StudentController
         $roleMiddleware = new RoleMiddleware($user);
 
         // Only admins and teachers can update enrollments
-        if (!$roleMiddleware->hasRole(['admin', 'teacher'])) {
+        if (!AccessControl::isAdmin($user)
+            && !AccessControl::isSuperAdmin($user)
+            && !AccessControl::hasRole($user, 'teacher')) {
             Response::forbidden('Only admins and teachers can update enrollments');
             return;
         }
@@ -493,6 +556,14 @@ class StudentController
         $enrollment = $this->studentRepo->findEnrollmentById($id);
 
         if (!$enrollment) {
+            Response::notFound('Enrollment not found');
+            return;
+        }
+
+        $enrolledStudent = $this->studentRepo->findById((int) $enrollment['student_id']);
+        if (!AccessControl::isSuperAdmin($user)
+            && (!$enrolledStudent
+                || (int) $enrolledStudent['institution_id'] !== AccessControl::institutionId($user))) {
             Response::notFound('Enrollment not found');
             return;
         }
@@ -562,7 +633,8 @@ class StudentController
         $roleMiddleware = new RoleMiddleware($user);
 
         // Only admins can delete enrollments
-        if (!$roleMiddleware->requireRole('admin')) {
+        if (!AccessControl::isAdmin($user) && !AccessControl::isSuperAdmin($user)) {
+            Response::forbidden('Only admins can delete enrollments');
             return;
         }
 

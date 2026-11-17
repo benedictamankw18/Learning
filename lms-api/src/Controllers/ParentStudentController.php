@@ -8,6 +8,7 @@ use App\Repositories\ParentStudentRepository;
 use App\Repositories\ParentRepository;
 use App\Repositories\StudentRepository;
 use App\Middleware\RoleMiddleware;
+use App\Security\AccessControl;
 
 class ParentStudentController
 {
@@ -31,6 +32,20 @@ class ParentStudentController
             return;
         }
 
+        if (AccessControl::isSuperAdmin($user)) {
+            // allowed
+        } elseif (AccessControl::isAdmin($user)) {
+            if ((int) $parent['institution_id'] !== AccessControl::institutionId($user)) {
+                Response::notFound('Parent not found');
+                return;
+            }
+        } elseif (AccessControl::hasRole($user, 'parent') && (int) $parent['user_id'] === (int) $user['user_id']) {
+            // allowed
+        } else {
+            Response::forbidden('You do not have permission to view parent students');
+            return;
+        }
+
         $students = $this->parentStudentRepo->getParentStudents($parentId);
         Response::success($students);
     }
@@ -41,6 +56,20 @@ class ParentStudentController
 
         if (!$student) {
             Response::notFound('Student not found');
+            return;
+        }
+
+        if (AccessControl::isSuperAdmin($user)) {
+            // allowed
+        } elseif (AccessControl::isAdmin($user) || AccessControl::hasRole($user, 'teacher')) {
+            if ((int) $student['institution_id'] !== AccessControl::institutionId($user)) {
+                Response::notFound('Student not found');
+                return;
+            }
+        } elseif (AccessControl::hasRole($user, 'student') && (int) $student['user_id'] === (int) $user['user_id']) {
+            // allowed
+        } else {
+            Response::forbidden('You do not have permission to view student parents');
             return;
         }
 
@@ -55,6 +84,16 @@ class ParentStudentController
         if (!$parentStudent) {
             Response::notFound('Parent-Student relationship not found');
             return;
+        }
+
+        if (!AccessControl::isSuperAdmin($user)) {
+            $parent = $this->parentRepo->findById((int) $parentStudent['parent_id']);
+            $student = $this->studentRepo->findById((int) $parentStudent['student_id']);
+            if (($parent && (int) $parent['institution_id'] !== AccessControl::institutionId($user))
+                || ($student && (int) $student['institution_id'] !== AccessControl::institutionId($user))) {
+                Response::notFound('Parent-Student relationship not found');
+                return;
+            }
         }
 
         Response::success($parentStudent);
@@ -104,6 +143,13 @@ class ParentStudentController
             return;
         }
 
+        if (!AccessControl::isSuperAdmin($user)
+            && ((int) $parent['institution_id'] !== AccessControl::institutionId($user)
+                || (int) $student['institution_id'] !== AccessControl::institutionId($user))) {
+            Response::forbidden('Parent and student must belong to your institution');
+            return;
+        }
+
         // Check if relationship already exists
         if ($this->parentStudentRepo->relationshipExists($data['parent_id'], $data['student_id'])) {
             Response::validationError(['message' => 'This parent-student relationship already exists']);
@@ -135,6 +181,16 @@ class ParentStudentController
         if (!$parentStudent) {
             Response::notFound('Parent-Student relationship not found');
             return;
+        }
+
+        if (!AccessControl::isSuperAdmin($user)) {
+            $parent = $this->parentRepo->findById((int) $parentStudent['parent_id']);
+            $student = $this->studentRepo->findById((int) $parentStudent['student_id']);
+            if (($parent && (int) $parent['institution_id'] !== AccessControl::institutionId($user))
+                || ($student && (int) $student['institution_id'] !== AccessControl::institutionId($user))) {
+                Response::notFound('Parent-Student relationship not found');
+                return;
+            }
         }
 
         $data = json_decode(file_get_contents('php://input'), true);
@@ -175,6 +231,16 @@ class ParentStudentController
         if (!$parentStudent) {
             Response::notFound('Parent-Student relationship not found');
             return;
+        }
+
+        if (!AccessControl::isSuperAdmin($user)) {
+            $parent = $this->parentRepo->findById((int) $parentStudent['parent_id']);
+            $student = $this->studentRepo->findById((int) $parentStudent['student_id']);
+            if (($parent && (int) $parent['institution_id'] !== AccessControl::institutionId($user))
+                || ($student && (int) $student['institution_id'] !== AccessControl::institutionId($user))) {
+                Response::notFound('Parent-Student relationship not found');
+                return;
+            }
         }
 
         if ($this->parentStudentRepo->delete($id)) {

@@ -3,10 +3,12 @@
 namespace App\Controllers;
 
 use App\Utils\Response;
+use App\Security\AccessControl;
 use App\Utils\Validator;
 use App\Utils\UuidHelper;
 use App\Repositories\ClassRepository;
 use App\Repositories\NotificationRepository;
+use App\Repositories\TeacherRepository;
 use App\Middleware\RoleMiddleware;
 use App\Middleware\AuthorizationMiddleware;
 
@@ -14,11 +16,13 @@ class ClassController
 {
     private ClassRepository $repo;
     private NotificationRepository $notificationRepo;
+    private TeacherRepository $teacherRepo;
 
     public function __construct()
     {
         $this->repo = new ClassRepository();
         $this->notificationRepo = new NotificationRepository();
+        $this->teacherRepo = new TeacherRepository();
     }
 
     private function notifyAdminsForClassChange(int $institutionId, int $classId, string $action): void
@@ -56,9 +60,14 @@ class ClassController
         $search = isset($_GET['search']) ? trim($_GET['search']) : null;
         if ($search === '') $search = null;
 
-        // Super admin can view all institutions' classes
-        if ($user['role'] !== 'super_admin' && !$institutionId) {
-            $institutionId = $user['institution_id'];
+        // Only super admins may choose an institution. Super admins without an
+        // explicit filter retain global visibility (null = no institution filter).
+        if (AccessControl::isSuperAdmin($user)) {
+            $institutionId = isset($_GET['institution_id']) && $_GET['institution_id'] !== ''
+                ? (int) $_GET['institution_id']
+                : null;
+        } else {
+            $institutionId = AccessControl::institutionId($user);
         }
 
         $classes = $this->repo->getAll($page, $limit, $institutionId, $programId, $gradeLevelId, $status, $search);
@@ -428,7 +437,20 @@ class ClassController
             return;
         }
 
-        $success = $this->repo->assignTeacher($classId, $data['teacher_id']);
+        $teacherId = (int) $data['teacher_id'];
+        $teacher = $this->teacherRepo->findById($teacherId);
+        if (!$teacher) {
+            Response::notFound('Teacher not found');
+            return;
+        }
+
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $teacher['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Teacher not found');
+            return;
+        }
+
+        $success = $this->repo->assignTeacher($classId, $teacherId);
 
         if ($success) {
             Response::success(['message' => 'Class teacher assigned successfully']);

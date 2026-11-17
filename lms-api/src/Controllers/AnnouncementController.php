@@ -5,6 +5,7 @@ namespace App\Controllers;
 use App\Repositories\AnnouncementRepository;
 use App\Repositories\NotificationRepository;
 use App\Repositories\UserRepository;
+use App\Security\AccessControl;
 use App\Utils\Response;
 use App\Utils\Validator;
 use App\Utils\UuidHelper;
@@ -13,6 +14,19 @@ use Exception;
 
 class AnnouncementController
 {
+    /**
+     * Attachment extensions that are safe to serve from the uploads
+     * directory. Mirrors the FileUploadController allowlist and adds CSV for
+     * announcement import templates.
+     */
+    private const ALLOWED_ATTACHMENT_EXTENSIONS = [
+        'jpg', 'jpeg', 'png', 'gif', 'webp',
+        'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt', 'csv',
+        'mp4', 'avi', 'mov', 'wmv',
+        'mp3', 'wav', 'ogg',
+        'zip', 'rar', '7z',
+    ];
+
     private AnnouncementRepository $announcementRepo;
     private NotificationRepository $notificationRepo;
     private UserRepository $userRepo;
@@ -52,7 +66,7 @@ class AnnouncementController
         $targetRole = $_GET['target_role'] ?? null;
         $isPublished = isset($_GET['is_published']) ? (bool) $_GET['is_published'] : null;
 
-        $institutionId = $user['institution_id'] ?? null;
+        $institutionId = $this->resolveInstitutionScope($user);
 
         $userRole = $user['role'] ?? null;
         $userId = $user['user_id'] ?? null;
@@ -63,7 +77,7 @@ class AnnouncementController
         // If caller didn't explicitly request drafts, hide unpublished announcements for non-admins.
         // However, allow authenticated users to see their own drafts by leaving isPublished=null
         // so the repository can include (is_published = 1 OR author_id = :user_id).
-        if ($isPublished === null && !$this->isAdmin($user) && empty($user['is_super_admin'])) {
+        if ($isPublished === null && !$this->isAdmin($user)) {
             $userIdProvided = isset($user['user_id']) && $user['user_id'];
             if (!$userIdProvided) {
                 $isPublished = true;
@@ -86,18 +100,44 @@ class AnnouncementController
 
     private function isAdmin(array $user): bool
     {
-        return !empty($user['is_super_admin']) || in_array('admin', $user['roles'] ?? []);
+        return AccessControl::isSuperAdmin($user) || AccessControl::isAdmin($user);
     }
 
     private function isTeacher(array $user): bool
     {
-        return in_array('teacher', $user['roles'] ?? []);
+        return AccessControl::hasRole($user, 'teacher');
+    }
+
+    private function isTeacherOnly(array $user): bool
+    {
+        return $this->isTeacher($user) && !$this->isAdmin($user);
+    }
+
+    /**
+     * Resolve the institution filter for announcement reads.
+     *
+     * Super admins are global and may read across institutions. Every other
+     * caller is pinned to their token institution so a missing or zero
+     * institution cannot widen the query to all tenants.
+     */
+    private function resolveInstitutionScope(array $user): ?int
+    {
+        if (AccessControl::isSuperAdmin($user)) {
+            return null;
+        }
+
+        $institutionId = AccessControl::institutionId($user);
+        if ($institutionId <= 0) {
+            Response::forbidden('Institution context is required');
+        }
+
+        return $institutionId;
     }
 
     private function canManageAnnouncement(array $user, array $announcement): bool
     {
         // Super admins may manage all
-        if (!empty($user['is_super_admin'])) {
+        if (AccessControl::isSuperAdmin($user)) {
             return true;
         }
 
@@ -123,7 +163,7 @@ class AnnouncementController
             return;
         }
 
-        $institutionId = $user['institution_id'] ?? null;
+        $institutionId = $this->resolveInstitutionScope($user);
         $announcement = $this->announcementRepo->findByUuid(
             $sanitizedUuid,
             $institutionId,
@@ -142,7 +182,7 @@ class AnnouncementController
         // Do not expose unpublished announcements to non-authors/non-admins
         $isPublishedFlag = !empty($announcement['is_published']);
         $isAuthor = isset($announcement['author_id']) && (string)$announcement['author_id'] === (string)($user['user_id'] ?? '');
-        if (!$isPublishedFlag && !$isAuthor && !$this->isAdmin($user) && empty($user['is_super_admin'])) {
+        if (!$isPublishedFlag && !$isAuthor && !$this->isAdmin($user)) {
             Response::error('Announcement not found', 404);
             return;
         }
@@ -168,7 +208,7 @@ class AnnouncementController
             return;
         }
 
-        $institutionId = $user['institution_id'] ?? null;
+        $institutionId = $this->resolveInstitutionScope($user);
         $announcement = $this->announcementRepo->findByUuid(
             $sanitizedUuid,
             $institutionId,
@@ -187,7 +227,7 @@ class AnnouncementController
         // Prevent marking drafts as read by unauthorized users
         $isPublishedFlag = !empty($announcement['is_published']);
         $isAuthor = isset($announcement['author_id']) && (string)$announcement['author_id'] === (string)($user['user_id'] ?? '');
-        if (!$isPublishedFlag && !$isAuthor && !$this->isAdmin($user) && empty($user['is_super_admin'])) {
+        if (!$isPublishedFlag && !$isAuthor && !$this->isAdmin($user)) {
             Response::error('Announcement not found', 404);
             return;
         }
@@ -221,6 +261,7 @@ class AnnouncementController
     {
         $isAdmin = $this->isAdmin($user);
         $isTeacher = $this->isTeacher($user);
+        $isTeacherOnly = $isTeacher && !$isAdmin;
 
         // Admins can create all announcements; teachers can create class announcements only.
         if (!$isAdmin && !$isTeacher) {
@@ -229,6 +270,11 @@ class AnnouncementController
         }
 
         $data = json_decode(file_get_contents('php://input'), true);
+
+        if (!is_array($data)) {
+            Response::error('Invalid JSON payload', 400);
+            return;
+        }
 
         $validator = new Validator($data);
         $validator->required(['title']);
@@ -239,16 +285,34 @@ class AnnouncementController
         }
 
         $targetRole = strtolower((string) ($data['target_role'] ?? 'all'));
-        if ($isTeacher && $targetRole !== 'class') {
+        if ($isTeacherOnly && $targetRole !== 'class') {
             Response::error('Unauthorized. Teachers can only create class announcements.', 403);
             return;
         }
 
         $data['uuid'] = UuidHelper::generate();
         $data['author_id'] = $user['user_id'];
-        $data['institution_id'] = !empty($user['is_super_admin'])
-            ? null
-            : ($user['institution_id'] ?? 1);
+
+        if (AccessControl::isSuperAdmin($user)) {
+            $requestedInstitution = $data['institution_id'] ?? null;
+            if ($requestedInstitution === null || $requestedInstitution === '') {
+                $data['institution_id'] = null;
+            } else {
+                $requestedInstitution = (int) $requestedInstitution;
+                if ($requestedInstitution < 0) {
+                    Response::badRequest('institution_id must be a positive integer or null');
+                    return;
+                }
+                $data['institution_id'] = $requestedInstitution > 0 ? $requestedInstitution : null;
+            }
+        } else {
+            $institutionId = AccessControl::institutionId($user);
+            if ($institutionId <= 0) {
+                Response::forbidden('Institution context is required');
+                return;
+            }
+            $data['institution_id'] = $institutionId;
+        }
 
         if (array_key_exists('published_at', $data)) {
             $data['published_at'] = $this->normalizeDateTime($data['published_at']);
@@ -266,14 +330,36 @@ class AnnouncementController
         }
 
         // If super admin provided a list of target institutions, create one announcement per institution
-        if (!empty($user['is_super_admin']) && !empty($data['target_institutions']) && is_array($data['target_institutions'])) {
-            $createdUuids = [];
+        if (AccessControl::isSuperAdmin($user)
+            && array_key_exists('target_institutions', $data)
+            && $data['target_institutions'] !== null
+            && $data['target_institutions'] !== '') {
+            if (!is_array($data['target_institutions'])) {
+                Response::badRequest('target_institutions must be an array of institution IDs');
+                return;
+            }
+
+            $targetInstitutions = [];
             foreach ($data['target_institutions'] as $inst) {
                 $instId = (int) $inst;
+                if ($instId <= 0) {
+                    Response::badRequest('target_institutions must contain positive institution IDs');
+                    return;
+                }
+                $targetInstitutions[$instId] = $instId;
+            }
+
+            if (empty($targetInstitutions)) {
+                Response::badRequest('target_institutions must contain at least one institution ID');
+                return;
+            }
+
+            $createdUuids = [];
+            foreach ($targetInstitutions as $instId) {
                 $dataCopy = $data;
                 $dataCopy['institution_id'] = $instId;
                 $dataCopy['uuid'] = UuidHelper::generate();
-                $createdId = $this->announcementRepo->create($dataCopy);
+                $this->announcementRepo->create($dataCopy);
                 $createdUuids[] = $dataCopy['uuid'];
 
                 if ($this->shouldSendAnnouncementNotification($dataCopy)) {
@@ -313,7 +399,7 @@ class AnnouncementController
             return;
         }
 
-        $institutionId = $user['institution_id'] ?? null;
+        $institutionId = $this->resolveInstitutionScope($user);
         $announcement = $this->announcementRepo->findByUuid(
             $sanitizedUuid,
             $institutionId,
@@ -337,6 +423,11 @@ class AnnouncementController
         $announcementId = $announcement['announcement_id'];
 
         $data = json_decode(file_get_contents('php://input'), true);
+
+        if (!is_array($data)) {
+            Response::error('Invalid JSON payload', 400);
+            return;
+        }
 
         $validator = new Validator($data);
         // No required fields for update
@@ -395,7 +486,7 @@ class AnnouncementController
             return;
         }
 
-        $institutionId = $user['institution_id'] ?? null;
+        $institutionId = $this->resolveInstitutionScope($user);
         $announcement = $this->announcementRepo->findByUuid(
             $sanitizedUuid,
             $institutionId,
@@ -495,7 +586,7 @@ class AnnouncementController
             return;
         }
 
-        $institutionId = $user['institution_id'] ?? null;
+        $institutionId = $this->resolveInstitutionScope($user);
         $announcement = $this->announcementRepo->findByUuid(
             $sanitizedUuid,
             $institutionId,
@@ -529,9 +620,27 @@ class AnnouncementController
             return;
         }
 
+        $extension = strtolower(pathinfo((string) $file['name'], PATHINFO_EXTENSION));
+        if ($extension === '' || !in_array($extension, self::ALLOWED_ATTACHMENT_EXTENSIONS, true)) {
+            Response::error(
+                'File type not allowed. Allowed types: ' . implode(', ', self::ALLOWED_ATTACHMENT_EXTENSIONS),
+                400
+            );
+            return;
+        }
+
         try {
+            $institutionId = (int) ($announcement['institution_id'] ?? 0);
+            if ($institutionId <= 0) {
+                $institutionId = (int) ($user['institution_id'] ?? 0);
+            }
+            if ($institutionId <= 0) {
+                Response::error('Institution context is required', 400);
+                return;
+            }
+
             $projectRoot = dirname(__DIR__, 2);
-            $uploadDir = $projectRoot . '/uploads/announcements/' . $sanitizedUuid . '/';
+            $uploadDir = $projectRoot . '/uploads/' . $institutionId . '/announcements/' . $sanitizedUuid . '/';
             if (!file_exists($uploadDir)) {
                 mkdir($uploadDir, 0777, true);
             }
@@ -551,7 +660,8 @@ class AnnouncementController
                 'filename' => $filename,
                 'size' => $file['size'],
                 'type' => $file['type'],
-                'url' => '/uploads/announcements/' . $sanitizedUuid . '/' . $filename,
+                'institution_id' => $institutionId,
+                'url' => '/uploads/' . $institutionId . '/announcements/' . $sanitizedUuid . '/' . $filename,
                 'uploaded_at' => date('Y-m-d H:i:s')
             ];
 

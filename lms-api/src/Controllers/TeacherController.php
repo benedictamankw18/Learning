@@ -8,6 +8,7 @@ use App\Utils\UuidHelper;
 use App\Repositories\TeacherRepository;
 use App\Repositories\UserRepository;
 use App\Middleware\RoleMiddleware;
+use App\Security\AccessControl;
 
 class TeacherController
 {
@@ -71,12 +72,19 @@ class TeacherController
         $teacherId = $teacher['teacher_id'];
 
         // Teachers can only view their own profile unless they're admin
-        if ($roleMiddleware->isTeacher() && !$roleMiddleware->isAdmin()) {
+        if (AccessControl::hasRole($user, 'teacher') && !AccessControl::isAdmin($user) && !AccessControl::isSuperAdmin($user)) {
             $currentTeacher = $this->teacherRepo->findByUserId($user['user_id']);
             if (!$currentTeacher || $currentTeacher['teacher_id'] != $teacherId) {
                 Response::forbidden('You can only view your own profile');
                 return;
             }
+        }
+
+        if (!AccessControl::isSuperAdmin($user)
+            && (AccessControl::isAdmin($user) || AccessControl::hasRole($user, 'teacher'))
+            && (int) $teacher['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Teacher not found');
+            return;
         }
 
         Response::success($teacher);
@@ -171,8 +179,15 @@ class TeacherController
 
         $teacherId = $teacher['teacher_id'];
 
+        if (!AccessControl::isSuperAdmin($user)
+            && (AccessControl::isAdmin($user) || AccessControl::hasRole($user, 'teacher'))
+            && (int) $teacher['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Teacher not found');
+            return;
+        }
+
         // Teachers can only update their own profile unless they're admin
-        if ($roleMiddleware->isTeacher() && !$roleMiddleware->isAdmin()) {
+        if (AccessControl::hasRole($user, 'teacher') && !AccessControl::isAdmin($user) && !AccessControl::isSuperAdmin($user)) {
             $currentTeacher = $this->teacherRepo->findByUserId($user['user_id']);
             if (!$currentTeacher || $currentTeacher['teacher_id'] != $teacherId) {
                 Response::forbidden('You can only update your own profile');
@@ -257,6 +272,13 @@ class TeacherController
 
         $teacherId = $teacher['teacher_id'];
 
+        if (!AccessControl::isSuperAdmin($user)
+            && (AccessControl::isAdmin($user) || AccessControl::hasRole($user, 'teacher'))
+            && (int) $teacher['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Teacher not found');
+            return;
+        }
+
         // Teachers can only view their own courses unless they're admin
         if ($roleMiddleware->isTeacher() && !$roleMiddleware->isAdmin()) {
             $currentTeacher = $this->teacherRepo->findByUserId($user['user_id']);
@@ -288,6 +310,13 @@ class TeacherController
         }
 
         $teacherId = $teacher['teacher_id'];
+
+        if (!AccessControl::isSuperAdmin($user)
+            && (AccessControl::isAdmin($user) || AccessControl::hasRole($user, 'teacher'))
+            && (int) $teacher['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Teacher not found');
+            return;
+        }
 
         // Teachers can only view their own schedule unless they're admin
         if ($roleMiddleware->isTeacher() && !$roleMiddleware->isAdmin()) {
@@ -331,6 +360,12 @@ class TeacherController
 
         $teacherId = $teacher['teacher_id'];
 
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $teacher['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Teacher not found');
+            return;
+        }
+
         // Soft delete - set employment_end_date
         $data = ['employment_end_date' => date('Y-m-d')];
 
@@ -362,6 +397,13 @@ class TeacherController
         }
 
         $teacherId = $teacher['teacher_id'];
+
+        if (!AccessControl::isSuperAdmin($user)
+            && (AccessControl::isAdmin($user) || AccessControl::hasRole($user, 'teacher'))
+            && (int) $teacher['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Teacher not found');
+            return;
+        }
 
         // Teachers can only view their own performance unless they're admin
         if ($roleMiddleware->isTeacher() && !$roleMiddleware->isAdmin()) {

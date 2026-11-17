@@ -9,6 +9,7 @@ use App\Repositories\CourseRepository;
 use App\Repositories\TeacherRepository;
 use App\Repositories\StudentRepository;
 use App\Middleware\RoleMiddleware;
+use App\Security\AccessControl;
 
 class AssessmentController
 {
@@ -31,6 +32,18 @@ class AssessmentController
 
         if (!$courseId) {
             Response::error('course_id parameter is required', 400);
+            return;
+        }
+
+        $course = $this->courseRepo->findById($courseId);
+        if (!$course) {
+            Response::notFound('Course not found');
+            return;
+        }
+
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $course['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Course not found');
             return;
         }
 
@@ -58,6 +71,18 @@ class AssessmentController
         $assessment = $this->assessmentRepo->findById($id);
 
         if (!$assessment) {
+            Response::notFound('Assessment not found');
+            return;
+        }
+
+        $course = $this->courseRepo->findById((int) $assessment['course_id']);
+        if (!$course) {
+            Response::notFound('Course not found');
+            return;
+        }
+
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $course['institution_id'] !== AccessControl::institutionId($user)) {
             Response::notFound('Assessment not found');
             return;
         }
@@ -109,6 +134,12 @@ class AssessmentController
             return;
         }
 
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $course['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Course not found');
+            return;
+        }
+
         // Teachers can only create assessments for their own courses
         if ($roleMiddleware->isTeacher() && !$roleMiddleware->isAdmin()) {
             $teacher = $this->teacherRepo->findByUserId($user['user_id']);
@@ -146,6 +177,16 @@ class AssessmentController
         }
 
         $course = $this->courseRepo->findById($assessment['course_id']);
+        if (!$course) {
+            Response::notFound('Course not found');
+            return;
+        }
+
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $course['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Assessment not found');
+            return;
+        }
 
         // Teachers can only update assessments for their own courses
         if ($roleMiddleware->isTeacher() && !$roleMiddleware->isAdmin()) {
@@ -183,6 +224,16 @@ class AssessmentController
         }
 
         $course = $this->courseRepo->findById($assessment['course_id']);
+        if (!$course) {
+            Response::notFound('Course not found');
+            return;
+        }
+
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $course['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Assessment not found');
+            return;
+        }
 
         // Teachers can only delete assessments for their own courses
         if ($roleMiddleware->isTeacher() && !$roleMiddleware->isAdmin()) {
@@ -216,9 +267,27 @@ class AssessmentController
             return;
         }
 
+        $course = $this->courseRepo->findById((int) $assessment['course_id']);
+        if (!$course) {
+            Response::notFound('Course not found');
+            return;
+        }
+
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $course['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Assessment not found');
+            return;
+        }
+
         $student = $this->studentRepo->findByUserId($user['user_id']);
 
         if (!$student) {
+            Response::notFound('Student profile not found');
+            return;
+        }
+
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $student['institution_id'] !== AccessControl::institutionId($user)) {
             Response::notFound('Student profile not found');
             return;
         }
@@ -252,6 +321,16 @@ class AssessmentController
         }
 
         $course = $this->courseRepo->findById($assessment['course_id']);
+        if (!$course) {
+            Response::notFound('Course not found');
+            return;
+        }
+
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $course['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Assessment not found');
+            return;
+        }
 
         // Teachers can only view submissions for their own courses
         if ($roleMiddleware->isTeacher() && !$roleMiddleware->isAdmin()) {
@@ -275,6 +354,30 @@ class AssessmentController
 
         if (!$roleMiddleware->hasRole(['admin', 'teacher'])) {
             Response::forbidden('Only admins and teachers can grade submissions');
+            return;
+        }
+
+        $submission = $this->assessmentRepo->findSubmissionById($submissionId);
+        if (!$submission) {
+            Response::notFound('Submission not found');
+            return;
+        }
+
+        $assessment = $this->assessmentRepo->findById((int) $submission['assessment_id']);
+        if (!$assessment) {
+            Response::notFound('Assessment not found');
+            return;
+        }
+
+        $course = $this->courseRepo->findById((int) $assessment['course_id']);
+        if (!$course) {
+            Response::notFound('Course not found');
+            return;
+        }
+
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $course['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Submission not found');
             return;
         }
 
@@ -304,6 +407,15 @@ class AssessmentController
         $submission = $this->assessmentRepo->findSubmissionById($id);
 
         if (!$submission) {
+            Response::notFound('Submission not found');
+            return;
+        }
+
+        $assessment = $this->assessmentRepo->findById((int) $submission['assessment_id']);
+        $course = $assessment ? $this->courseRepo->findById((int) $assessment['course_id']) : null;
+
+        if (!AccessControl::isSuperAdmin($user)
+            && ($course && (int) $course['institution_id'] !== AccessControl::institutionId($user))) {
             Response::notFound('Submission not found');
             return;
         }
@@ -341,6 +453,15 @@ class AssessmentController
         $submission = $this->assessmentRepo->findSubmissionById($id);
 
         if (!$submission) {
+            Response::notFound('Submission not found');
+            return;
+        }
+
+        $assessment = $this->assessmentRepo->findById((int) $submission['assessment_id']);
+        $course = $assessment ? $this->courseRepo->findById((int) $assessment['course_id']) : null;
+
+        if (!AccessControl::isSuperAdmin($user)
+            && ($course && (int) $course['institution_id'] !== AccessControl::institutionId($user))) {
             Response::notFound('Submission not found');
             return;
         }

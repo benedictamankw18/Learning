@@ -3,16 +3,44 @@
 namespace App\Controllers;
 
 use App\Repositories\CourseContentRepository;
+use App\Repositories\CourseRepository;
+use App\Repositories\TeacherRepository;
 use App\Utils\Response;
 use App\Utils\UuidHelper;
+use App\Security\AccessControl;
 
 class CourseContentController
 {
     private $courseContentRepository;
+    private $courseRepo;
+    private $teacherRepo;
 
     public function __construct()
     {
         $this->courseContentRepository = new CourseContentRepository();
+        $this->courseRepo = new CourseRepository();
+        $this->teacherRepo = new TeacherRepository();
+    }
+
+    /**
+     * Only admins, super admins, and the teacher who owns the course may
+     * create or modify its content. Students must never reach these endpoints.
+     */
+    private function canManageCourse(array $user, array $course): bool
+    {
+        if (AccessControl::isSuperAdmin($user) || AccessControl::isAdmin($user)) {
+            return true;
+        }
+
+        if (!AccessControl::hasRole($user, 'teacher')) {
+            return false;
+        }
+
+        $teacher = $this->teacherRepo->findByUserId((int) ($user['user_id'] ?? 0));
+
+        return $teacher
+            && (int) ($teacher['teacher_id'] ?? 0) > 0
+            && (int) ($course['teacher_id'] ?? 0) === (int) $teacher['teacher_id'];
     }
 
     /**
@@ -22,6 +50,13 @@ class CourseContentController
     public function index(array $user): void
     {
         try {
+            if (!AccessControl::isSuperAdmin($user)
+                && !AccessControl::isAdmin($user)
+                && !AccessControl::hasRole($user, 'teacher')) {
+                Response::forbidden('You do not have permission to view course content');
+                return;
+            }
+
             $courseId = $_GET['course_id'] ?? null;
             $sectionId = $_GET['section_id'] ?? null;
             $teacherId = $_GET['teacher_id'] ?? null;
@@ -42,6 +77,12 @@ class CourseContentController
                 $filters['type'] = $type;
             if ($isActive !== null)
                 $filters['is_active'] = $isActive;
+
+            if (AccessControl::isSuperAdmin($user) && isset($_GET['institution_id']) && $_GET['institution_id'] !== '') {
+                $filters['institution_id'] = (int) $_GET['institution_id'];
+            } elseif (!AccessControl::isSuperAdmin($user)) {
+                $filters['institution_id'] = AccessControl::institutionId($user);
+            }
 
             $content = $this->courseContentRepository->getAll($filters, $limit, $offset);
             $total = $this->courseContentRepository->count($filters);
@@ -76,6 +117,18 @@ class CourseContentController
             $content = $this->courseContentRepository->findByUuid($sanitizedUuid);
 
             if (!$content) {
+                Response::notFound('Content not found');
+                return;
+            }
+
+            $course = $this->courseRepo->findById((int) $content['course_id']);
+            if (!$course) {
+                Response::notFound('Course not found');
+                return;
+            }
+
+            if (!AccessControl::isSuperAdmin($user)
+                && (int) $course['institution_id'] !== AccessControl::institutionId($user)) {
                 Response::notFound('Content not found');
                 return;
             }
@@ -116,6 +169,23 @@ class CourseContentController
                 return;
             }
 
+            $course = $this->courseRepo->findById((int) $data['course_id']);
+            if (!$course) {
+                Response::notFound('Course not found');
+                return;
+            }
+
+            if (!AccessControl::isSuperAdmin($user)
+                && (int) $course['institution_id'] !== AccessControl::institutionId($user)) {
+                Response::forbidden('You can only create content for courses in your institution');
+                return;
+            }
+
+            if (!$this->canManageCourse($user, $course)) {
+                Response::forbidden('You do not have permission to modify course content');
+                return;
+            }
+
             $contentId = $this->courseContentRepository->create($data);
 
             Response::success(['id' => $contentId], 'Course content created successfully');
@@ -143,6 +213,40 @@ class CourseContentController
             if (!$content) {
                 Response::notFound('Content not found');
                 return;
+            }
+
+            $course = $this->courseRepo->findById((int) $content['course_id']);
+            if (!$course) {
+                Response::notFound('Course not found');
+                return;
+            }
+
+            if (!AccessControl::isSuperAdmin($user)
+                && (int) $course['institution_id'] !== AccessControl::institutionId($user)) {
+                Response::notFound('Content not found');
+                return;
+            }
+
+            if (!$this->canManageCourse($user, $course)) {
+                Response::forbidden('You do not have permission to modify course content');
+                return;
+            }
+
+            if (isset($data['course_id'])) {
+                $targetCourse = $this->courseRepo->findById((int) $data['course_id']);
+                if (!$targetCourse) {
+                    Response::notFound('Course not found');
+                    return;
+                }
+                if (!AccessControl::isSuperAdmin($user)
+                    && (int) $targetCourse['institution_id'] !== AccessControl::institutionId($user)) {
+                    Response::forbidden('You can only duplicate content within your institution');
+                    return;
+                }
+                if (!$this->canManageCourse($user, $targetCourse)) {
+                    Response::forbidden('You do not have permission to modify course content');
+                    return;
+                }
             }
 
             $contentId = $content['course_content_id'];
@@ -183,6 +287,23 @@ class CourseContentController
                 return;
             }
 
+            $course = $this->courseRepo->findById((int) $content['course_id']);
+            if (!$course) {
+                Response::notFound('Course not found');
+                return;
+            }
+
+            if (!AccessControl::isSuperAdmin($user)
+                && (int) $course['institution_id'] !== AccessControl::institutionId($user)) {
+                Response::notFound('Content not found');
+                return;
+            }
+
+            if (!$this->canManageCourse($user, $course)) {
+                Response::forbidden('You do not have permission to modify course content');
+                return;
+            }
+
             $contentId = $content['course_content_id'];
 
             $this->courseContentRepository->delete($contentId);
@@ -200,6 +321,18 @@ class CourseContentController
     public function getByCourse(array $user, int $courseId): void
     {
         try {
+            $course = $this->courseRepo->findById($courseId);
+            if (!$course) {
+                Response::notFound('Course not found');
+                return;
+            }
+
+            if (!AccessControl::isSuperAdmin($user)
+                && (int) $course['institution_id'] !== AccessControl::institutionId($user)) {
+                Response::notFound('Course not found');
+                return;
+            }
+
             $content = $this->courseContentRepository->getByCourse($courseId);
 
             Response::success($content);
@@ -254,6 +387,40 @@ class CourseContentController
                 return;
             }
 
+            $course = $this->courseRepo->findById((int) $content['course_id']);
+            if (!$course) {
+                Response::notFound('Course not found');
+                return;
+            }
+
+            if (!AccessControl::isSuperAdmin($user)
+                && (int) $course['institution_id'] !== AccessControl::institutionId($user)) {
+                Response::notFound('Content not found');
+                return;
+            }
+
+            if (!$this->canManageCourse($user, $course)) {
+                Response::forbidden('You do not have permission to modify course content');
+                return;
+            }
+
+            if (isset($data['course_id'])) {
+                $targetCourse = $this->courseRepo->findById((int) $data['course_id']);
+                if (!$targetCourse) {
+                    Response::notFound('Course not found');
+                    return;
+                }
+                if (!AccessControl::isSuperAdmin($user)
+                    && (int) $targetCourse['institution_id'] !== AccessControl::institutionId($user)) {
+                    Response::forbidden('You can only duplicate content within your institution');
+                    return;
+                }
+                if (!$this->canManageCourse($user, $targetCourse)) {
+                    Response::forbidden('You do not have permission to modify course content');
+                    return;
+                }
+            }
+
             $contentId = $content['course_content_id'];
 
             $newId = $this->courseContentRepository->duplicate(
@@ -290,11 +457,98 @@ class CourseContentController
                 return;
             }
 
+            $course = $this->courseRepo->findById((int) $content['course_id']);
+            if (!$course) {
+                Response::notFound('Course not found');
+                return;
+            }
+
+            if (!AccessControl::isSuperAdmin($user)
+                && (int) $course['institution_id'] !== AccessControl::institutionId($user)) {
+                Response::notFound('Content not found');
+                return;
+            }
+
             $contentId = $content['course_content_id'];
 
             $this->courseContentRepository->update($contentId, ['is_active' => $isActive ? 1 : 0]);
 
             Response::success(null, $isActive ? 'Content activated successfully' : 'Content deactivated successfully');
+        } catch (\Exception $e) {
+            Response::serverError('Failed to update content status: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Get content for a class subject/course
+     * GET /course-content/class-subject/{classSubjectId}
+     */
+    public function getByClassSubject(array $user, int $classSubjectId): void
+    {
+        try {
+            $course = $this->courseRepo->findById($classSubjectId);
+            if (!$course) {
+                Response::notFound('Course not found');
+                return;
+            }
+
+            if (!AccessControl::isSuperAdmin($user)
+                && (int) $course['institution_id'] !== AccessControl::institutionId($user)) {
+                Response::notFound('Course not found');
+                return;
+            }
+
+            $content = $this->courseContentRepository->getByCourse($classSubjectId);
+            Response::success($content);
+        } catch (\Exception $e) {
+            Response::serverError('Failed to fetch content: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Publish/unpublish content
+     * PUT /course-content/{uuid}/publish
+     */
+    public function publish(array $user, string $uuid): void
+    {
+        try {
+            $sanitizedUuid = UuidHelper::sanitize($uuid);
+            if (!$sanitizedUuid) {
+                Response::badRequest('Invalid UUID format');
+                return;
+            }
+
+            $content = $this->courseContentRepository->findByUuid($sanitizedUuid);
+            if (!$content) {
+                Response::notFound('Content not found');
+                return;
+            }
+
+            $course = $this->courseRepo->findById((int) $content['course_id']);
+            if (!$course) {
+                Response::notFound('Course not found');
+                return;
+            }
+
+            if (!AccessControl::isSuperAdmin($user)
+                && (int) $course['institution_id'] !== AccessControl::institutionId($user)) {
+                Response::notFound('Content not found');
+                return;
+            }
+
+            if (!$this->canManageCourse($user, $course)) {
+                Response::forbidden('You do not have permission to modify course content');
+                return;
+            }
+
+            $data = json_decode(file_get_contents('php://input'), true) ?: $_POST;
+            $isPublished = isset($data['is_published']) ? (bool) $data['is_published'] : true;
+
+            $this->courseContentRepository->update((int) $content['course_content_id'], [
+                'is_published' => $isPublished ? 1 : 0,
+            ]);
+
+            Response::success(null, $isPublished ? 'Content published successfully' : 'Content unpublished successfully');
         } catch (\Exception $e) {
             Response::serverError('Failed to update content status: ' . $e->getMessage());
         }

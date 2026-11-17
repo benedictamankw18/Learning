@@ -4,18 +4,22 @@ namespace App\Controllers;
 
 use App\Repositories\ChatRepository;
 use App\Repositories\NotificationRepository;
+use App\Repositories\UserRepository;
 use App\Utils\Response;
 use App\Utils\UuidHelper;
+use App\Security\AccessControl;
 
 class ChatController
 {
     private ChatRepository $repo;
     private NotificationRepository $notificationRepo;
+    private UserRepository $userRepo;
 
     public function __construct()
     {
         $this->repo = new ChatRepository();
         $this->notificationRepo = new NotificationRepository();
+        $this->userRepo = new UserRepository();
     }
 
     private function institutionId(array $user): ?int
@@ -70,6 +74,12 @@ class ChatController
                 return;
             }
 
+            $otherUser = $this->userRepo->findById($otherUserId);
+            if (!$otherUser || (int) ($otherUser['institution_id'] ?? 0) !== (int) ($institutionId ?? 0)) {
+                Response::forbidden('You can only start direct chats with users in your institution');
+                return;
+            }
+
             $roomId = $this->repo->createDirectRoom($userId, $otherUserId, $institutionId);
             if (!$roomId) {
                 Response::serverError('Failed to create direct chat room');
@@ -92,6 +102,17 @@ class ChatController
         if (!empty($errors)) {
             Response::validationError($errors);
             return;
+        }
+
+        foreach (array_map('intval', $body['member_ids'] ?? []) as $memberId) {
+            if ($memberId <= 0) {
+                continue;
+            }
+            $member = $this->userRepo->findById($memberId);
+            if (!$member || (int) ($member['institution_id'] ?? 0) !== (int) ($institutionId ?? 0)) {
+                Response::forbidden('All group members must belong to your institution');
+                return;
+            }
         }
 
         $roomId = $this->repo->createGroupRoom([
@@ -232,6 +253,14 @@ class ChatController
             return;
         }
 
+        foreach (array_map('intval', $memberIds) as $memberId) {
+            $member = $this->userRepo->findById($memberId);
+            if (!$member || (int) ($member['institution_id'] ?? 0) !== (int) ($room['institution_id'] ?? 0)) {
+                Response::forbidden('All members must belong to the room institution');
+                return;
+            }
+        }
+
         $role = in_array(strtolower((string) ($body['member_role'] ?? 'member')), ['admin', 'member'], true)
             ? strtolower((string) $body['member_role'])
             : 'member';
@@ -284,6 +313,15 @@ class ChatController
         if (($room['room_type'] ?? '') === 'direct' && !$isSelfLeave) {
             Response::forbidden('Direct chats cannot remove other members');
             return;
+        }
+
+        if (!$isSelfLeave) {
+            $memberRole = $this->repo->getRoomMemberRole((int) $room['room_id'], $currentUserId);
+            $isSystemAdmin = AccessControl::isSuperAdmin($user);
+            if (!$isSystemAdmin && $memberRole !== 'admin') {
+                Response::forbidden('Only group admins can remove members');
+                return;
+            }
         }
 
         if (!$this->repo->removeMember((int) $room['room_id'], $memberUserId)) {

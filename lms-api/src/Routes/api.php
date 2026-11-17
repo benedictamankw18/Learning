@@ -539,8 +539,8 @@ return [
     // File Upload routes
     'POST /upload' => ['controller' => 'FileUploadController', 'method' => 'upload', 'auth' => true],
     'POST /upload/multiple' => ['controller' => 'FileUploadController', 'method' => 'uploadMultiple', 'auth' => true],
-    'GET /upload/{category}/{filename}' => ['controller' => 'FileUploadController', 'method' => 'serve', 'auth' => false],
-    'GET /upload/{category}/{subdir}/{filename}' => ['controller' => 'FileUploadController', 'method' => 'serveNested', 'auth' => false],
+    'GET /upload/{category}/{filename}' => ['controller' => 'FileUploadController', 'method' => 'serve', 'auth' => true],
+    'GET /upload/{category}/{subdir}/{filename}' => ['controller' => 'FileUploadController', 'method' => 'serveNested', 'auth' => true],
     'GET /upload/{category}/{filename}/info' => ['controller' => 'FileUploadController', 'method' => 'getFileInfo', 'auth' => true],
     'DELETE /upload/{category}/{filename}' => ['controller' => 'FileUploadController', 'method' => 'delete', 'auth' => true],
 

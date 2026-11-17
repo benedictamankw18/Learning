@@ -16,10 +16,35 @@ class RoleMiddleware
     public function hasRole(string|array $roles): bool
     {
         $requiredRoles = is_array($roles) ? $roles : [$roles];
+
         $userRoles = $this->user['roles'] ?? [];
+        if (!is_array($userRoles)) {
+            $userRoles = [$userRoles];
+        }
+
+        // AuthMiddleware exposes both the legacy singular role and the roles
+        // array. Consider both so super-admin-only accounts are not denied.
+        if (isset($this->user['role'])) {
+            $userRoles[] = (string) $this->user['role'];
+        }
+
+        $isSuperAdmin = !empty($this->user['is_super_admin'])
+            || in_array('super_admin', $userRoles, true);
 
         foreach ($requiredRoles as $role) {
-            if (in_array($role, $userRoles)) {
+            $role = (string) $role;
+
+            if (in_array($role, $userRoles, true)) {
+                return true;
+            }
+
+            // A super admin satisfies admin-level gates but not role-specific
+            // gates such as teacher or student.
+            if ($role === 'admin' && $isSuperAdmin) {
+                return true;
+            }
+
+            if ($role === 'super_admin' && $isSuperAdmin) {
                 return true;
             }
         }

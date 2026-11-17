@@ -7,6 +7,7 @@ use App\Utils\Validator;
 use App\Repositories\ParentRepository;
 use App\Repositories\UserRepository;
 use App\Middleware\RoleMiddleware;
+use App\Security\AccessControl;
 
 class ParentController
 {
@@ -44,6 +45,12 @@ class ParentController
         $parent = $this->repo->findById($id);
 
         if (!$parent) {
+            Response::notFound('Parent not found');
+            return;
+        }
+
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $parent['institution_id'] !== AccessControl::institutionId($user)) {
             Response::notFound('Parent not found');
             return;
         }
@@ -162,6 +169,12 @@ class ParentController
             return;
         }
 
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $parent['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Parent not found');
+            return;
+        }
+
         $data = json_decode(file_get_contents('php://input'), true);
 
         $validator = new Validator($data);
@@ -265,6 +278,12 @@ class ParentController
             return;
         }
 
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $parent['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Parent not found');
+            return;
+        }
+
         if ($this->repo->delete($id)) {
             Response::success(['message' => 'Parent deleted successfully']);
         } else {
@@ -277,6 +296,12 @@ class ParentController
         $parent = $this->repo->findById($id);
 
         if (!$parent) {
+            Response::notFound('Parent not found');
+            return;
+        }
+
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $parent['institution_id'] !== AccessControl::institutionId($user)) {
             Response::notFound('Parent not found');
             return;
         }

@@ -8,6 +8,7 @@ use App\Repositories\SemesterRepository;
 use App\Repositories\NotificationRepository;
 use App\Repositories\AcademicYearRepository;
 use App\Middleware\RoleMiddleware;
+use App\Security\AccessControl;
 
 class SemesterController
 {
@@ -65,8 +66,16 @@ class SemesterController
         $limit = isset($_GET['limit']) ? (int) $_GET['limit'] : 20;
         $academicYearId = isset($_GET['academic_year_id']) ? (int) $_GET['academic_year_id'] : null;
 
-        $semesters = $this->repo->getAll($page, $limit, $academicYearId);
-        $total = $this->repo->count($academicYearId);
+        if (AccessControl::isSuperAdmin($user) && isset($_GET['institution_id']) && $_GET['institution_id'] !== '') {
+            $institutionId = (int) $_GET['institution_id'];
+        } elseif (!AccessControl::isSuperAdmin($user)) {
+            $institutionId = AccessControl::institutionId($user);
+        } else {
+            $institutionId = null;
+        }
+
+        $semesters = $this->repo->getAll($page, $limit, $academicYearId, $institutionId);
+        $total = $this->repo->count($academicYearId, $institutionId);
 
         Response::success([
             'data' => $semesters,
@@ -84,6 +93,12 @@ class SemesterController
         $semester = $this->repo->findById($id);
 
         if (!$semester) {
+            Response::notFound('Semester not found');
+            return;
+        }
+
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) ($semester['institution_id'] ?? 0) !== AccessControl::institutionId($user)) {
             Response::notFound('Semester not found');
             return;
         }
@@ -192,10 +207,21 @@ class SemesterController
             return;
         }
 
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) ($semester['institution_id'] ?? 0) !== AccessControl::institutionId($user)) {
+            Response::notFound('Semester not found');
+            return;
+        }
+
         $data = json_decode((string) file_get_contents('php://input'), true);
+
         if (!is_array($data)) {
             Response::error('Invalid JSON payload', 400);
             return;
+        }
+
+        if (!AccessControl::isSuperAdmin($user)) {
+            unset($data['institution_id']);
         }
 
         if (array_key_exists('is_current', $data)) {
@@ -311,6 +337,12 @@ class SemesterController
             return;
         }
 
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) ($semester['institution_id'] ?? 0) !== AccessControl::institutionId($user)) {
+            Response::notFound('Semester not found');
+            return;
+        }
+
         if ($semester['is_current'] == 1 || $semester['is_current'] === '1') {
             Response::error('Cannot delete current semester. Please set another semester as current first.', 409);
             return;
@@ -325,7 +357,7 @@ class SemesterController
 
     public function getCurrent(array $user): void
     {
-        $institutionId = ($user['role'] ?? '') !== 'super_admin' ? (int) ($user['institution_id'] ?? 0) : null;
+        $institutionId = AccessControl::isSuperAdmin($user) ? null : AccessControl::institutionId($user);
         $semester = $this->repo->getCurrent($institutionId);
 
         if (!$semester) {

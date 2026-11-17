@@ -4,6 +4,7 @@ namespace App\Controllers;
 
 use App\Repositories\StudentActivityRepository;
 use App\Utils\Response;
+use App\Security\AccessControl;
 
 class StudentActivityController
 {
@@ -29,9 +30,11 @@ class StudentActivityController
 
     private function institutionId(array $user): ?int
     {
-        $id = isset($_GET['institution_id'])
-            ? (int) $_GET['institution_id']
-            : ($user['institution_id'] ?? null);
+        if (AccessControl::isSuperAdmin($user) && isset($_GET['institution_id'])) {
+            $id = (int) $_GET['institution_id'];
+        } else {
+            $id = (int) ($user['institution_id'] ?? 0);
+        }
 
         return $id ?: null;
     }

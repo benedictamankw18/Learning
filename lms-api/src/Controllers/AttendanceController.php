@@ -10,6 +10,7 @@ use App\Repositories\StudentRepository;
 use App\Repositories\CourseRepository;
 use App\Repositories\TeacherRepository;
 use App\Middleware\RoleMiddleware;
+use App\Security\AccessControl;
 
 class AttendanceController
 {
@@ -76,6 +77,12 @@ class AttendanceController
             return;
         }
 
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $student['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Student not found');
+            return;
+        }
+
         // Students can only view their own attendance
         if ($roleMiddleware->isStudent() && $student['user_id'] != $user['user_id']) {
             Response::forbidden('You can only view your own attendance');
@@ -110,6 +117,12 @@ class AttendanceController
         $course = $this->courseRepo->findById($courseId);
 
         if (!$course) {
+            Response::notFound('Course not found');
+            return;
+        }
+
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $course['institution_id'] !== AccessControl::institutionId($user)) {
             Response::notFound('Course not found');
             return;
         }
@@ -199,7 +212,13 @@ class AttendanceController
             return;
         }
 
-        // Teachers can only mark attendance for their own courses
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $course['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Course not found');
+            return;
+        }
+
+        // Teachers can only mark attendance for their own courses:
         if ($roleMiddleware->isTeacher() && !$roleMiddleware->isAdmin()) {
             $teacher = $this->teacherRepo->findByUserId($user['user_id']);
             if (!$teacher || $course['teacher_id'] != $teacher['teacher_id']) {
@@ -209,6 +228,16 @@ class AttendanceController
         }
 
         $student = $this->studentRepo->findById((int) $data['student_id']);
+        if (!$student) {
+            Response::notFound('Student not found');
+            return;
+        }
+
+        if ((int) ($student['institution_id'] ?? 0) !== (int) ($course['institution_id'] ?? 0)) {
+            Response::notFound('Student not found');
+            return;
+        }
+
         $attendanceExisted = $this->attendanceRepo->exists((int) $data['student_id'], (int) $data['course_id'], (string) $data['attendance_date']);
 
         if (
@@ -256,7 +285,13 @@ class AttendanceController
             return;
         }
 
-        // Teachers can only mark attendance for their own courses
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $course['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Course not found');
+            return;
+        }
+
+        // Teachers can only mark attendance for their own courses:
         if ($roleMiddleware->isTeacher() && !$roleMiddleware->isAdmin()) {
             $teacher = $this->teacherRepo->findByUserId($user['user_id']);
             if (!$teacher || $course['teacher_id'] != $teacher['teacher_id']) {
@@ -267,18 +302,40 @@ class AttendanceController
 
         $courseId = (int) $data['course_id'];
         $date = (string) $data['attendance_date'];
+        $students = (array) ($data['students'] ?? []);
+
+        if (empty($students)) {
+            Response::validationError(['students' => 'At least one student is required']);
+            return;
+        }
+
+        $courseInstitutionId = (int) ($course['institution_id'] ?? 0);
+        foreach ($students as $studentRow) {
+            $studentId = (int) ($studentRow['student_id'] ?? 0);
+            if ($studentId <= 0) {
+                Response::validationError(['students' => 'Each student entry requires a valid student_id']);
+                return;
+            }
+
+            $student = $this->studentRepo->findById($studentId);
+            if (!$student || (int) ($student['institution_id'] ?? 0) !== $courseInstitutionId) {
+                Response::validationError(['students' => 'One or more students do not belong to this institution']);
+                return;
+            }
+        }
+
         $existingKeys = [];
-        foreach ((array) $data['students'] as $studentRow) {
+        foreach ($students as $studentRow) {
             $studentId = (int) ($studentRow['student_id'] ?? 0);
             if ($studentId > 0 && $this->attendanceRepo->exists($studentId, $courseId, $date)) {
                 $existingKeys[$studentId] = true;
             }
         }
 
-        if ($this->attendanceRepo->bulkMarkAttendance($courseId, $date, $data['students'])) {
+        if ($this->attendanceRepo->bulkMarkAttendance($courseId, $date, $students)) {
             $course = $this->courseRepo->findById($courseId);
             if ($course) {
-                foreach ((array) $data['students'] as $studentRow) {
+                foreach ($students as $studentRow) {
                     $studentId = (int) ($studentRow['student_id'] ?? 0);
                     if ($studentId <= 0 || isset($existingKeys[$studentId])) {
                         continue;
@@ -307,8 +364,14 @@ class AttendanceController
             return;
         }
 
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $student['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Student not found');
+            return;
+        }
+
         // Students can only view their own stats
-        if ($roleMiddleware->isStudent() && $student['user_id'] != $user['user_id']) {
+        if (AccessControl::hasRole($user, 'student') && (int) $student['user_id'] !== (int) $user['user_id']) {
             Response::forbidden('You can only view your own attendance statistics');
             return;
         }
@@ -331,6 +394,18 @@ class AttendanceController
         $attendance = $this->attendanceRepo->findById($id);
 
         if (!$attendance) {
+            Response::notFound('Attendance record not found');
+            return;
+        }
+
+        $course = $this->courseRepo->findById((int) $attendance['course_id']);
+        if (!$course) {
+            Response::notFound('Course not found');
+            return;
+        }
+
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $course['institution_id'] !== AccessControl::institutionId($user)) {
             Response::notFound('Attendance record not found');
             return;
         }
@@ -376,6 +451,18 @@ class AttendanceController
         $attendance = $this->attendanceRepo->findById($id);
 
         if (!$attendance) {
+            Response::notFound('Attendance record not found');
+            return;
+        }
+
+        $course = $this->courseRepo->findById((int) $attendance['course_id']);
+        if (!$course) {
+            Response::notFound('Course not found');
+            return;
+        }
+
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $course['institution_id'] !== AccessControl::institutionId($user)) {
             Response::notFound('Attendance record not found');
             return;
         }

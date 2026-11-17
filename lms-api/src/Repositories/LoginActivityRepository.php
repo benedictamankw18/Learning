@@ -45,6 +45,11 @@ class LoginActivityRepository
                 $params['to_date'] = $filters['to_date'];
             }
 
+            if (isset($filters['institution_id'])) {
+                $where[] = "u.institution_id = :institution_id";
+                $params['institution_id'] = $filters['institution_id'];
+            }
+
             $whereClause = !empty($where) ? "WHERE " . implode(" AND ", $where) : "";
 
             $stmt = $this->db->prepare("
@@ -86,28 +91,33 @@ class LoginActivityRepository
             $params = [];
 
             if (isset($filters['user_id'])) {
-                $where[] = "user_id = :user_id";
+                $where[] = "la.user_id = :user_id";
                 $params['user_id'] = $filters['user_id'];
             }
 
             if (isset($filters['is_successful'])) {
-                $where[] = "is_successful = :is_successful";
+                $where[] = "la.is_successful = :is_successful";
                 $params['is_successful'] = $filters['is_successful'];
             }
 
             if (isset($filters['from_date'])) {
-                $where[] = "login_time >= :from_date";
+                $where[] = "la.login_time >= :from_date";
                 $params['from_date'] = $filters['from_date'];
             }
 
             if (isset($filters['to_date'])) {
-                $where[] = "login_time <= :to_date";
+                $where[] = "la.login_time <= :to_date";
                 $params['to_date'] = $filters['to_date'];
+            }
+
+            if (isset($filters['institution_id'])) {
+                $where[] = "u.institution_id = :institution_id";
+                $params['institution_id'] = $filters['institution_id'];
             }
 
             $whereClause = !empty($where) ? "WHERE " . implode(" AND ", $where) : "";
 
-            $stmt = $this->db->prepare("SELECT COUNT(*) as total FROM login_activity $whereClause");
+            $stmt = $this->db->prepare("SELECT COUNT(*) as total FROM login_activity la LEFT JOIN users u ON la.user_id = u.user_id $whereClause");
 
             foreach ($params as $key => $value) {
                 $stmt->bindValue(":$key", $value);
@@ -193,7 +203,7 @@ class LoginActivityRepository
     /**
      * Get failed login attempts
      */
-    public function getFailedAttempts(?int $userId = null, int $hours = 24): array
+    public function getFailedAttempts(?int $userId = null, int $hours = 24, ?int $institutionId = null): array
     {
         try {
             $sql = "
@@ -208,17 +218,23 @@ class LoginActivityRepository
                 AND la.login_time >= DATE_SUB(NOW(), INTERVAL :hours HOUR)
             ";
 
+            $params = [':hours' => $hours];
+
             if ($userId !== null) {
                 $sql .= " AND la.user_id = :user_id";
+                $params[':user_id'] = $userId;
+            }
+
+            if ($institutionId !== null) {
+                $sql .= " AND u.institution_id = :institution_id";
+                $params[':institution_id'] = $institutionId;
             }
 
             $sql .= " ORDER BY la.login_time DESC";
 
             $stmt = $this->db->prepare($sql);
-            $stmt->bindValue(':hours', $hours, PDO::PARAM_INT);
-
-            if ($userId !== null) {
-                $stmt->bindValue(':user_id', $userId, PDO::PARAM_INT);
+            foreach ($params as $key => $value) {
+                $stmt->bindValue($key, $value, PDO::PARAM_INT);
             }
 
             $stmt->execute();

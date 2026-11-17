@@ -5,14 +5,19 @@ namespace App\Controllers;
 use App\Utils\Response;
 use App\Utils\Validator;
 use App\Repositories\ClassSubjectRepository;
+use App\Repositories\ClassRepository;
+use App\Repositories\SubjectRepository;
 use App\Repositories\TeacherRepository;
 use App\Repositories\NotificationRepository;
 use App\Repositories\InstitutionRepository;
 use App\Middleware\RoleMiddleware;
+use App\Security\AccessControl;
 
 class ClassSubjectController
 {
     private ClassSubjectRepository $repo;
+    private ClassRepository $classRepo;
+    private SubjectRepository $subjectRepo;
     private TeacherRepository $teacherRepo;
     private NotificationRepository $notificationRepo;
     private InstitutionRepository $institutionRepo;
@@ -20,6 +25,8 @@ class ClassSubjectController
     public function __construct()
     {
         $this->repo = new ClassSubjectRepository();
+        $this->classRepo = new ClassRepository();
+        $this->subjectRepo = new SubjectRepository();
         $this->teacherRepo = new TeacherRepository();
         $this->notificationRepo = new NotificationRepository();
         $this->institutionRepo = new InstitutionRepository();
@@ -127,9 +134,11 @@ class ClassSubjectController
         $subjectId = isset($_GET['subject_id']) ? (int) $_GET['subject_id'] : null;
         $teacherId = isset($_GET['teacher_id']) ? (int) $_GET['teacher_id'] : null;
 
-        // Super admin can view all institutions' class subjects
-        if ($user['role'] !== 'super_admin' && !$institutionId) {
-            $institutionId = $user['institution_id'];
+        // Only super admins may choose an institution.
+        if (AccessControl::isSuperAdmin($user) && isset($_GET['institution_id'])) {
+            $institutionId = (int) $_GET['institution_id'];
+        } else {
+            $institutionId = AccessControl::institutionId($user);
         }
 
         $classSubjects = $this->repo->getAll($page, $limit, $institutionId, $classId, $subjectId, $teacherId);
@@ -159,8 +168,9 @@ class ClassSubjectController
         }
 
         // Check authorization
-        if ($user['role'] !== 'super_admin' && $classSubject['institution_id'] != $user['institution_id']) {
-            Response::forbidden('You do not have access to this class subject');
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $classSubject['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Class subject not found');
             return;
         }
 
@@ -180,13 +190,24 @@ class ClassSubjectController
 
         $data = json_decode(file_get_contents('php://input'), true);
 
+        if (!is_array($data)) {
+            Response::error('Invalid JSON payload', 400);
+            return;
+        }
+
         // Set institution_id based on user role
-        if ($user['role'] !== 'super_admin') {
-            $data['institution_id'] = $user['institution_id'];
+        if (!AccessControl::isSuperAdmin($user)) {
+            $institutionId = AccessControl::institutionId($user);
+            if ($institutionId <= 0) {
+                Response::error('Missing institution context', 400);
+                return;
+            }
+            $data['institution_id'] = $institutionId;
         }
 
         $validator = new Validator($data);
         $validator->required(['institution_id', 'class_id', 'subject_id'])
+            ->numeric('institution_id')
             ->numeric('class_id')
             ->numeric('subject_id');
 
@@ -197,6 +218,34 @@ class ClassSubjectController
         if ($validator->fails()) {
             Response::validationError($validator->getErrors());
             return;
+        }
+
+        $class = $this->classRepo->findById((int) $data['class_id']);
+        $subject = $this->subjectRepo->findById((int) $data['subject_id']);
+
+        if (!$class || !$subject) {
+            Response::validationError(['class_id' => 'Selected class or subject does not exist']);
+            return;
+        }
+
+        if (!AccessControl::isSuperAdmin($user)
+            && ((int) $class['institution_id'] !== AccessControl::institutionId($user)
+                || (int) ($subject['institution_id'] ?? 0) !== AccessControl::institutionId($user))) {
+            Response::forbidden('Class and subject must belong to your institution');
+            return;
+        }
+
+        if (!empty($data['teacher_id'])) {
+            $teacher = $this->teacherRepo->findById((int) $data['teacher_id']);
+            if (!$teacher) {
+                Response::validationError(['teacher_id' => 'Selected teacher does not exist']);
+                return;
+            }
+            if (!AccessControl::isSuperAdmin($user)
+                && (int) $teacher['institution_id'] !== AccessControl::institutionId($user)) {
+                Response::forbidden('Teacher must belong to your institution');
+                return;
+            }
         }
 
         // Check if class subject already exists
@@ -244,24 +293,62 @@ class ClassSubjectController
         }
 
         // Check authorization
-        if ($user['role'] !== 'super_admin' && $classSubject['institution_id'] != $user['institution_id']) {
-            Response::forbidden('You do not have access to update this class subject');
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $classSubject['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Class subject not found');
             return;
         }
 
         // Teachers can only update their own class subjects
-        if ($user['role'] === 'teacher' && $classSubject['teacher_id'] != $user['teacher_id']) {
+        if ($roleMiddleware->isTeacher() && !$roleMiddleware->isAdmin()
+            && $classSubject['teacher_id'] != ($user['teacher_id'] ?? 0)) {
             Response::forbidden('You can only update your own class subjects');
             return;
         }
 
         $data = json_decode(file_get_contents('php://input'), true);
 
+        if (!is_array($data)) {
+            Response::error('Invalid JSON payload', 400);
+            return;
+        }
+
         $validator = new Validator($data);
 
         if ($validator->fails()) {
             Response::validationError($validator->getErrors());
             return;
+        }
+
+        if (isset($data['class_id'])) {
+            $class = $this->classRepo->findById((int) $data['class_id']);
+            if (!$class || (!AccessControl::isSuperAdmin($user)
+                && (int) $class['institution_id'] !== AccessControl::institutionId($user))) {
+                Response::validationError(['class_id' => 'Selected class does not exist or belongs to another institution']);
+                return;
+            }
+        }
+
+        if (isset($data['subject_id'])) {
+            $subject = $this->subjectRepo->findById((int) $data['subject_id']);
+            if (!$subject || (!AccessControl::isSuperAdmin($user)
+                && (int) ($subject['institution_id'] ?? 0) !== AccessControl::institutionId($user))) {
+                Response::validationError(['subject_id' => 'Selected subject does not exist or belongs to another institution']);
+                return;
+            }
+        }
+
+        if (isset($data['teacher_id'])) {
+            $teacher = $this->teacherRepo->findById((int) $data['teacher_id']);
+            if (!$teacher || (!AccessControl::isSuperAdmin($user)
+                && (int) $teacher['institution_id'] !== AccessControl::institutionId($user))) {
+                Response::validationError(['teacher_id' => 'Selected teacher does not exist or belongs to another institution']);
+                return;
+            }
+        }
+
+        if (!AccessControl::isSuperAdmin($user)) {
+            unset($data['institution_id']);
         }
 
         $success = $this->repo->update($id, $data);
@@ -292,8 +379,9 @@ class ClassSubjectController
         }
 
         // Check authorization
-        if ($user['role'] !== 'super_admin' && $classSubject['institution_id'] != $user['institution_id']) {
-            Response::forbidden('You do not have access to delete this class subject');
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $classSubject['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Class subject not found');
             return;
         }
 
@@ -319,8 +407,9 @@ class ClassSubjectController
         }
 
         // Check authorization
-        if ($user['role'] !== 'super_admin' && $classSubject['institution_id'] != $user['institution_id']) {
-            Response::forbidden('You do not have access to this class subject');
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $classSubject['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Class subject not found');
             return;
         }
 
@@ -342,14 +431,15 @@ class ClassSubjectController
         }
 
         // Check authorization
-        if ($user['role'] !== 'super_admin' && $classSubject['institution_id'] != $user['institution_id']) {
-            Response::forbidden('You do not have access to this class subject');
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $classSubject['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Class subject not found');
             return;
         }
 
         $materials = $this->repo->getMaterials($id);
 
-        if (($user['role'] ?? null) === 'student') {
+        if (AccessControl::hasRole($user, 'student')) {
             $studentId = isset($user['student_id']) ? (int) $user['student_id'] : 0;
             if ($studentId <= 0) {
                 $studentId = $this->repo->getStudentIdByUserId((int) ($user['user_id'] ?? 0)) ?? 0;
@@ -393,18 +483,26 @@ class ClassSubjectController
         }
 
         // Check authorization
-        if ($user['role'] !== 'super_admin' && $classSubject['institution_id'] != $user['institution_id']) {
-            Response::forbidden('You do not have access to this class subject');
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $classSubject['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Class subject not found');
             return;
         }
 
         // Teachers can only add materials to their own class subjects
-        if ($user['role'] === 'teacher' && $classSubject['teacher_id'] != $user['teacher_id']) {
+        if ($roleMiddleware->isTeacher() && !$roleMiddleware->isAdmin()
+            && $classSubject['teacher_id'] != ($user['teacher_id'] ?? 0)) {
             Response::forbidden('You can only add materials to your own class subjects');
             return;
         }
 
         $data = json_decode(file_get_contents('php://input'), true);
+
+        if (!is_array($data)) {
+            Response::error('Invalid JSON payload', 400);
+            return;
+        }
+
         $data['course_id'] = $id;
         $data['uploaded_by'] = $user['user_id'];
 
@@ -498,19 +596,26 @@ class ClassSubjectController
         }
 
         // Check authorization
-        if ($user['role'] !== 'super_admin' && $material['institution_id'] != $user['institution_id']) {
-            Response::forbidden('You do not have access to this material');
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $material['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Material not found');
             return;
         }
 
         // Teachers can only update materials for their own class subjects
         $classSubject = $this->repo->findById($courseId);
-        if ($user['role'] === 'teacher' && $classSubject['teacher_id'] != $user['teacher_id']) {
+        if ($roleMiddleware->isTeacher() && !$roleMiddleware->isAdmin()
+            && ($classSubject['teacher_id'] ?? 0) != ($user['teacher_id'] ?? 0)) {
             Response::forbidden('You can only update materials for your own class subjects');
             return;
         }
 
         $data = json_decode(file_get_contents('php://input'), true);
+
+        if (!is_array($data)) {
+            Response::error('Invalid JSON payload', 400);
+            return;
+        }
 
         $validator = new Validator($data);
 
@@ -614,14 +719,16 @@ class ClassSubjectController
         }
 
         // Check authorization
-        if ($user['role'] !== 'super_admin' && $material['institution_id'] != $user['institution_id']) {
-            Response::forbidden('You do not have access to this material');
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $material['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Material not found');
             return;
         }
 
         // Teachers can only delete materials for their own class subjects
         $classSubject = $this->repo->findById($courseId);
-        if ($user['role'] === 'teacher' && $classSubject['teacher_id'] != $user['teacher_id']) {
+        if ($roleMiddleware->isTeacher() && !$roleMiddleware->isAdmin()
+            && ($classSubject['teacher_id'] ?? 0) != ($user['teacher_id'] ?? 0)) {
             Response::forbidden('You can only delete materials for your own class subjects');
             return;
         }
@@ -658,8 +765,9 @@ class ClassSubjectController
             return;
         }
 
-        if ($user['role'] !== 'super_admin' && (int) $material['institution_id'] !== (int) $user['institution_id']) {
-            Response::forbidden('You do not have access to this material');
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $material['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Material not found');
             return;
         }
 
@@ -715,12 +823,14 @@ class ClassSubjectController
             return;
         }
 
-        if ($user['role'] !== 'super_admin' && (int) $classSubject['institution_id'] !== (int) $user['institution_id']) {
-            Response::forbidden('You do not have access to this class subject');
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $classSubject['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Class subject not found');
             return;
         }
 
-        if ($user['role'] === 'teacher' && (int) ($classSubject['teacher_id'] ?? 0) !== (int) ($user['teacher_id'] ?? 0)) {
+        if ($roleMiddleware->isTeacher() && !$roleMiddleware->isAdmin()
+            && (int) ($classSubject['teacher_id'] ?? 0) !== (int) ($user['teacher_id'] ?? 0)) {
             Response::forbidden('You can only access required-progress for your own class subjects');
             return;
         }
@@ -766,8 +876,9 @@ class ClassSubjectController
         }
 
         // Check authorization
-        if ($user['role'] !== 'super_admin' && $classSubject['institution_id'] != $user['institution_id']) {
-            Response::forbidden('You do not have access to this class subject');
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $classSubject['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Class subject not found');
             return;
         }
 
@@ -795,18 +906,26 @@ class ClassSubjectController
         }
 
         // Check authorization
-        if ($user['role'] !== 'super_admin' && $classSubject['institution_id'] != $user['institution_id']) {
-            Response::forbidden('You do not have access to this class subject');
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $classSubject['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Class subject not found');
             return;
         }
 
         // Teachers can only add content to their own class subjects
-        if ($user['role'] === 'teacher' && $classSubject['teacher_id'] != $user['teacher_id']) {
+        if ($roleMiddleware->isTeacher() && !$roleMiddleware->isAdmin()
+            && $classSubject['teacher_id'] != ($user['teacher_id'] ?? 0)) {
             Response::forbidden('You can only add content to your own class subjects');
             return;
         }
 
         $data = json_decode(file_get_contents('php://input'), true);
+
+        if (!is_array($data)) {
+            Response::error('Invalid JSON payload', 400);
+            return;
+        }
+
         $data['course_id'] = $id;
         $data['created_by'] = $user['user_id'];
 
@@ -858,19 +977,26 @@ class ClassSubjectController
         }
 
         // Check authorization
-        if ($user['role'] !== 'super_admin' && $content['institution_id'] != $user['institution_id']) {
-            Response::forbidden('You do not have access to this content');
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $content['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Content not found');
             return;
         }
 
         // Teachers can only update content for their own class subjects
         $classSubject = $this->repo->findById($courseId);
-        if ($user['role'] === 'teacher' && $classSubject['teacher_id'] != $user['teacher_id']) {
+        if ($roleMiddleware->isTeacher() && !$roleMiddleware->isAdmin()
+            && ($classSubject['teacher_id'] ?? 0) != ($user['teacher_id'] ?? 0)) {
             Response::forbidden('You can only update content for your own class subjects');
             return;
         }
 
         $data = json_decode(file_get_contents('php://input'), true);
+
+        if (!is_array($data)) {
+            Response::error('Invalid JSON payload', 400);
+            return;
+        }
 
         $validator = new Validator($data);
 
@@ -923,14 +1049,16 @@ class ClassSubjectController
         }
 
         // Check authorization
-        if ($user['role'] !== 'super_admin' && $content['institution_id'] != $user['institution_id']) {
-            Response::forbidden('You do not have access to this content');
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $content['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Content not found');
             return;
         }
 
         // Teachers can only delete content for their own class subjects
         $classSubject = $this->repo->findById($courseId);
-        if ($user['role'] === 'teacher' && $classSubject['teacher_id'] != $user['teacher_id']) {
+        if ($roleMiddleware->isTeacher() && !$roleMiddleware->isAdmin()
+            && ($classSubject['teacher_id'] ?? 0) != ($user['teacher_id'] ?? 0)) {
             Response::forbidden('You can only delete content for your own class subjects');
             return;
         }
@@ -957,8 +1085,9 @@ class ClassSubjectController
         }
 
         // Check authorization
-        if ($user['role'] !== 'super_admin' && $classSubject['institution_id'] != $user['institution_id']) {
-            Response::forbidden('You do not have access to this class subject');
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $classSubject['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Class subject not found');
             return;
         }
 
@@ -980,8 +1109,9 @@ class ClassSubjectController
         }
 
         // Check authorization
-        if ($user['role'] !== 'super_admin' && $classSubject['institution_id'] != $user['institution_id']) {
-            Response::forbidden('You do not have access to this class subject');
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $classSubject['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Class subject not found');
             return;
         }
 
@@ -1009,12 +1139,19 @@ class ClassSubjectController
         }
 
         // Check authorization - institution level
-        if ($user['role'] !== 'super_admin' && $classSubject['institution_id'] != $user['institution_id']) {
-            Response::forbidden('You do not have access to this class subject');
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $classSubject['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Class subject not found');
             return;
         }
 
         $data = json_decode(file_get_contents('php://input'), true);
+
+        if (!is_array($data)) {
+            Response::error('Invalid JSON payload', 400);
+            return;
+        }
+
         $data['course_id'] = $id;
         $data['institution_id'] = $classSubject['institution_id'] ?? ($user['institution_id'] ?? null);
 
@@ -1079,18 +1216,36 @@ class ClassSubjectController
         }
 
         // Check authorization
-        if ($user['role'] !== 'super_admin' && $classSubject['institution_id'] != $user['institution_id']) {
-            Response::forbidden('You do not have access to this class subject');
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $classSubject['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Class subject not found');
             return;
         }
 
         $data = json_decode(file_get_contents('php://input'), true);
+
+        if (!is_array($data)) {
+            Response::error('Invalid JSON payload', 400);
+            return;
+        }
 
         $validator = new Validator($data);
         $validator->required(['teacher_id'])->numeric('teacher_id');
 
         if ($validator->fails()) {
             Response::validationError($validator->getErrors());
+            return;
+        }
+
+        $teacher = $this->teacherRepo->findById((int) $data['teacher_id']);
+        if (!$teacher) {
+            Response::notFound('Teacher not found');
+            return;
+        }
+
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $teacher['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Teacher not found');
             return;
         }
 
@@ -1127,12 +1282,18 @@ class ClassSubjectController
         }
 
         // Check authorization - institution level
-        if ($user['role'] !== 'super_admin' && $schedule['institution_id'] != $user['institution_id']) {
-            Response::forbidden('You do not have access to this schedule');
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $schedule['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Schedule not found');
             return;
         }
 
         $data = json_decode(file_get_contents('php://input'), true);
+
+        if (!is_array($data)) {
+            Response::error('Invalid JSON payload', 400);
+            return;
+        }
 
         $validator = new Validator($data);
         if (isset($data['day_of_week'])) {
@@ -1186,8 +1347,9 @@ class ClassSubjectController
         }
 
         // Check authorization - institution level
-        if ($user['role'] !== 'super_admin' && $schedule['institution_id'] != $user['institution_id']) {
-            Response::forbidden('You do not have access to this schedule');
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $schedule['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Schedule not found');
             return;
         }
 

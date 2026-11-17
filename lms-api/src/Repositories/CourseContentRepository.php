@@ -15,6 +15,7 @@ class CourseContentRepository extends BaseRepository
                 CONCAT(u.first_name, ' ', u.last_name) as created_by_name
                 FROM {$this->table} cc
                 LEFT JOIN users u ON cc.created_by = u.user_id
+                LEFT JOIN class_subjects cs ON cc.course_id = cs.course_id
                 WHERE 1=1";
         $params = [];
 
@@ -43,6 +44,11 @@ class CourseContentRepository extends BaseRepository
             $params[':is_active'] = $filters['is_active'];
         }
 
+        if (!empty($filters['institution_id'])) {
+            $sql .= " AND cs.institution_id = :institution_id";
+            $params[':institution_id'] = $filters['institution_id'];
+        }
+
         $sql .= " ORDER BY cc.created_at DESC LIMIT :limit OFFSET :offset";
         $params[':limit'] = (int) $limit;
         $params[':offset'] = (int) $offset;
@@ -62,32 +68,37 @@ class CourseContentRepository extends BaseRepository
 
     public function count(array $filters = []): int
     {
-        $sql = "SELECT COUNT(*) as total FROM {$this->table} WHERE 1=1";
+        $sql = "SELECT COUNT(*) as total FROM {$this->table} cc LEFT JOIN class_subjects cs ON cc.course_id = cs.course_id WHERE 1=1";
         $params = [];
 
         if (!empty($filters['course_id'])) {
-            $sql .= " AND course_id = :course_id";
+            $sql .= " AND cc.course_id = :course_id";
             $params[':course_id'] = $filters['course_id'];
         }
 
         if (!empty($filters['section_id'])) {
-            $sql .= " AND section_id = :section_id";
+            $sql .= " AND cc.section_id = :section_id";
             $params[':section_id'] = $filters['section_id'];
         }
 
         if (!empty($filters['teacher_id'])) {
-            $sql .= " AND created_by = :teacher_id";
+            $sql .= " AND cc.created_by = :teacher_id";
             $params[':teacher_id'] = $filters['teacher_id'];
         }
 
         if (!empty($filters['type'])) {
-            $sql .= " AND content_type = :type";
+            $sql .= " AND cc.content_type = :type";
             $params[':type'] = $filters['type'];
         }
 
         if (isset($filters['is_active'])) {
-            $sql .= " AND is_active = :is_active";
+            $sql .= " AND cc.is_active = :is_active";
             $params[':is_active'] = $filters['is_active'];
+        }
+
+        if (!empty($filters['institution_id'])) {
+            $sql .= " AND cs.institution_id = :institution_id";
+            $params[':institution_id'] = $filters['institution_id'];
         }
 
         $stmt = $this->db->prepare($sql);

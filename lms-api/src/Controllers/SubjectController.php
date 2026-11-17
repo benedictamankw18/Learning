@@ -8,6 +8,7 @@ use App\Utils\UuidHelper;
 use App\Repositories\SubjectRepository;
 use App\Repositories\NotificationRepository;
 use App\Middleware\RoleMiddleware;
+use App\Security\AccessControl;
 
 class SubjectController
 {
@@ -46,11 +47,12 @@ class SubjectController
         $search = isset($_GET['search']) && $_GET['search'] !== '' ? trim($_GET['search']) : null;
         $isCore = isset($_GET['is_core']) && $_GET['is_core'] !== '' ? (int) $_GET['is_core'] : null;
 
-        $institutionId = null;
-        if ($user['role'] !== 'super_admin') {
-            $institutionId = $user['institution_id'];
-        } elseif (isset($_GET['institution_id'])) {
+        if (AccessControl::isSuperAdmin($user) && isset($_GET['institution_id'])) {
             $institutionId = (int) $_GET['institution_id'];
+        } elseif (!AccessControl::isSuperAdmin($user)) {
+            $institutionId = AccessControl::institutionId($user);
+        } else {
+            $institutionId = null;
         }
 
         $subjects = $this->repo->getAll($page, $limit, $institutionId, $search, $isCore);
@@ -78,6 +80,12 @@ class SubjectController
         $subject = $this->repo->findByUuid($sanitizedUuid);
 
         if (!$subject) {
+            Response::notFound('Subject not found');
+            return;
+        }
+
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) ($subject['institution_id'] ?? 0) !== AccessControl::institutionId($user)) {
             Response::notFound('Subject not found');
             return;
         }
@@ -157,9 +165,19 @@ class SubjectController
             return;
         }
 
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) ($subject['institution_id'] ?? 0) !== AccessControl::institutionId($user)) {
+            Response::notFound('Subject not found');
+            return;
+        }
+
         $subjectId = $subject['subject_id'];
 
         $data = json_decode(file_get_contents('php://input'), true);
+
+        if (!AccessControl::isSuperAdmin($user)) {
+            unset($data['institution_id']);
+        }
 
         $validator = new Validator($data);
         if (isset($data['subject_code'])) {
@@ -206,6 +224,12 @@ class SubjectController
             return;
         }
 
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) ($subject['institution_id'] ?? 0) !== AccessControl::institutionId($user)) {
+            Response::notFound('Subject not found');
+            return;
+        }
+
         $subjectId = $subject['subject_id'];
 
         if ($this->repo->delete($subjectId)) {
@@ -218,6 +242,14 @@ class SubjectController
     public function getCoreSubjects(array $user): void
     {
         $subjects = $this->repo->getCoreSubjects();
+
+        if (!AccessControl::isSuperAdmin($user)) {
+            $institutionId = AccessControl::institutionId($user);
+            $subjects = array_values(array_filter($subjects, function ($subject) use ($institutionId) {
+                return (int) ($subject['institution_id'] ?? 0) === $institutionId;
+            }));
+        }
+
         Response::success($subjects);
     }
 }

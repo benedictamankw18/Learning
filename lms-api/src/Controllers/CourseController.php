@@ -8,11 +8,16 @@ use App\Repositories\CourseRepository;
 use App\Repositories\CourseReviewRepository;
 use App\Repositories\CourseScheduleRepository;
 use App\Repositories\CourseMaterialRepository;
+use App\Repositories\ClassRepository;
+use App\Repositories\SubjectRepository;
+use App\Repositories\AcademicYearRepository;
+use App\Repositories\SemesterRepository;
 use App\Repositories\TeacherRepository;
 use App\Repositories\StudentRepository;
 use App\Repositories\NotificationRepository;
 use App\Repositories\InstitutionRepository;
 use App\Middleware\RoleMiddleware;
+use App\Security\AccessControl;
 
 class CourseController
 {
@@ -20,6 +25,10 @@ class CourseController
     private CourseReviewRepository $reviewRepo;
     private CourseScheduleRepository $scheduleRepo;
     private CourseMaterialRepository $materialRepo;
+    private ClassRepository $classRepo;
+    private SubjectRepository $subjectRepo;
+    private AcademicYearRepository $academicYearRepo;
+    private SemesterRepository $semesterRepo;
     private TeacherRepository $teacherRepo;
     private StudentRepository $studentRepo;
     private NotificationRepository $notificationRepo;
@@ -31,10 +40,75 @@ class CourseController
         $this->reviewRepo = new CourseReviewRepository();
         $this->scheduleRepo = new CourseScheduleRepository();
         $this->materialRepo = new CourseMaterialRepository();
+        $this->classRepo = new ClassRepository();
+        $this->subjectRepo = new SubjectRepository();
+        $this->academicYearRepo = new AcademicYearRepository();
+        $this->semesterRepo = new SemesterRepository();
         $this->teacherRepo = new TeacherRepository();
         $this->studentRepo = new StudentRepository();
         $this->notificationRepo = new NotificationRepository();
         $this->institutionRepo = new InstitutionRepository();
+    }
+
+    /**
+     * Ensure class, subject, teacher, academic year, and semester references
+     * all belong to the target institution.
+     *
+     * @return string|null Error message, or null when valid.
+     */
+    private function validateCourseReferences(array $data, int $institutionId): ?string
+    {
+        if (isset($data['class_id'])) {
+            $class = $this->classRepo->findById((int) $data['class_id']);
+            if (!$class) {
+                return 'Selected class does not exist';
+            }
+            if ($institutionId > 0 && (int) ($class['institution_id'] ?? 0) !== $institutionId) {
+                return 'Selected class belongs to another institution';
+            }
+        }
+
+        if (isset($data['subject_id'])) {
+            $subject = $this->subjectRepo->findById((int) $data['subject_id']);
+            if (!$subject) {
+                return 'Selected subject does not exist';
+            }
+            if ($institutionId > 0 && (int) ($subject['institution_id'] ?? 0) !== $institutionId) {
+                return 'Selected subject belongs to another institution';
+            }
+        }
+
+        if (!empty($data['teacher_id'])) {
+            $teacher = $this->teacherRepo->findById((int) $data['teacher_id']);
+            if (!$teacher) {
+                return 'Selected teacher does not exist';
+            }
+            if ($institutionId > 0 && (int) ($teacher['institution_id'] ?? 0) !== $institutionId) {
+                return 'Selected teacher belongs to another institution';
+            }
+        }
+
+        if (!empty($data['academic_year_id'])) {
+            $year = $this->academicYearRepo->findById(
+                (int) $data['academic_year_id'],
+                $institutionId > 0 ? $institutionId : null
+            );
+            if (!$year) {
+                return 'Selected academic year is invalid for this institution';
+            }
+        }
+
+        if (!empty($data['semester_id'])) {
+            $semester = $this->semesterRepo->findById((int) $data['semester_id']);
+            if (!$semester) {
+                return 'Selected semester does not exist';
+            }
+            if ($institutionId > 0 && (int) ($semester['institution_id'] ?? 0) !== $institutionId) {
+                return 'Selected semester belongs to another institution';
+            }
+        }
+
+        return null;
     }
 
     private function notifyCourseMaterialChanged(array $course, string $action, array $actor): void
@@ -137,8 +211,16 @@ class CourseController
         $teacherId = isset($_GET['teacher_id']) ? (int) $_GET['teacher_id'] : null;
         $status = $_GET['status'] ?? null;
 
-        $courses = $this->courseRepo->getAll($page, $limit, $teacherId, $status);
-        $total = $this->courseRepo->count($teacherId, $status);
+        if (AccessControl::isSuperAdmin($user) && isset($_GET['institution_id']) && $_GET['institution_id'] !== '') {
+            $institutionId = (int) $_GET['institution_id'];
+        } elseif (!AccessControl::isSuperAdmin($user)) {
+            $institutionId = AccessControl::institutionId($user);
+        } else {
+            $institutionId = null;
+        }
+
+        $courses = $this->courseRepo->getAll($page, $limit, $teacherId, $status, $institutionId);
+        $total = $this->courseRepo->count($teacherId, $status, $institutionId);
 
         Response::paginated($courses, $total, $page, $limit);
     }
@@ -148,6 +230,12 @@ class CourseController
         $course = $this->courseRepo->findById($id);
 
         if (!$course) {
+            Response::notFound('Course not found');
+            return;
+        }
+
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $course['institution_id'] !== AccessControl::institutionId($user)) {
             Response::notFound('Course not found');
             return;
         }
@@ -180,12 +268,21 @@ class CourseController
 
         $data = json_decode(file_get_contents('php://input'), true);
 
+        if (!is_array($data)) {
+            Response::error('Invalid JSON payload', 400);
+            return;
+        }
+
         $validator = new Validator($data);
-        $validator->required(['course_code', 'course_name']);
+        $validator->required(['course_code', 'course_name', 'class_id', 'subject_id']);
 
         // Validate teacher_id only if provided
         if (isset($data['teacher_id'])) {
             $validator->numeric('teacher_id');
+        }
+
+        if (isset($data['class_id'])) {
+            $validator->numeric('class_id');
         }
 
         // Validate new class structure fields
@@ -221,6 +318,22 @@ class CourseController
             return;
         }
 
+        // Determine the institution that will own the course.
+        if (AccessControl::isSuperAdmin($user)) {
+            $institutionId = (int) ($data['institution_id'] ?? 0);
+            if ($institutionId <= 0) {
+                Response::error('institution_id is required for super admin', 400);
+                return;
+            }
+        } else {
+            $institutionId = AccessControl::institutionId($user);
+            if ($institutionId <= 0) {
+                Response::error('Missing institution context', 400);
+                return;
+            }
+        }
+        $data['institution_id'] = $institutionId;
+
         // Teachers can only create courses for themselves
         if ($roleMiddleware->isTeacher() && !$roleMiddleware->isAdmin()) {
             $teacher = $this->teacherRepo->findByUserId($user['user_id']);
@@ -237,9 +350,10 @@ class CourseController
             }
         }
 
-        // Add institution_id for multi-tenant support
-        if ($user['role'] !== 'super_admin') {
-            $data['institution_id'] = $user['institution_id'];
+        $referenceError = $this->validateCourseReferences($data, $institutionId);
+        if ($referenceError !== null) {
+            Response::validationError(['course' => $referenceError]);
+            return;
         }
 
         $courseId = $this->courseRepo->create($data);
@@ -269,8 +383,14 @@ class CourseController
             return;
         }
 
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $course['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Course not found');
+            return;
+        }
+
         // Teachers can only update their own courses
-        if ($roleMiddleware->isTeacher() && !$roleMiddleware->isAdmin()) {
+        if (AccessControl::hasRole($user, 'teacher') && !AccessControl::isAdmin($user) && !AccessControl::isSuperAdmin($user)) {
             $teacher = $this->teacherRepo->findByUserId($user['user_id']);
             if (!$teacher || $course['teacher_id'] != $teacher['teacher_id']) {
                 Response::forbidden('You can only update your own courses');
@@ -279,6 +399,49 @@ class CourseController
         }
 
         $data = json_decode(file_get_contents('php://input'), true);
+
+        if (!is_array($data)) {
+            Response::error('Invalid JSON payload', 400);
+            return;
+        }
+
+        if (!AccessControl::isSuperAdmin($user)) {
+            unset($data['institution_id']);
+            $targetInstitutionId = (int) $course['institution_id'];
+        } else {
+            $targetInstitutionId = (int) ($data['institution_id'] ?? $course['institution_id'] ?? 0);
+            if (isset($data['institution_id']) && (int) $data['institution_id'] <= 0) {
+                Response::error('institution_id must be a positive integer', 400);
+                return;
+            }
+        }
+
+        if ($targetInstitutionId <= 0) {
+            Response::error('Missing institution context', 400);
+            return;
+        }
+
+        // If a super admin moves the course to another institution, validate
+        // the existing references against the new institution as well.
+        $validationData = $data;
+        if ($targetInstitutionId !== (int) ($course['institution_id'] ?? 0)) {
+            foreach (['class_id', 'subject_id', 'teacher_id', 'academic_year_id', 'semester_id'] as $field) {
+                if (!array_key_exists($field, $validationData)) {
+                    $validationData[$field] = $course[$field] ?? null;
+                }
+            }
+        }
+
+        $referenceError = $this->validateCourseReferences($validationData, $targetInstitutionId);
+        if ($referenceError !== null) {
+            Response::validationError(['course' => $referenceError]);
+            return;
+        }
+
+        if (empty($data)) {
+            Response::error('No updatable fields supplied', 400);
+            return;
+        }
 
         if ($this->courseRepo->update($id, $data)) {
             $updated = $this->courseRepo->findById($id);
@@ -292,7 +455,20 @@ class CourseController
     {
         $roleMiddleware = new RoleMiddleware($user);
 
-        if (!$roleMiddleware->requireRole('admin')) {
+        if (!AccessControl::isAdmin($user) && !AccessControl::isSuperAdmin($user) && !AccessControl::hasRole($user, 'teacher')) {
+            Response::forbidden('Only admins and teachers can delete courses');
+            return;
+        }
+
+        $course = $this->courseRepo->findById($id);
+        if (!$course) {
+            Response::notFound('Course not found');
+            return;
+        }
+
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $course['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Course not found');
             return;
         }
 
@@ -310,6 +486,13 @@ class CourseController
         $course = $this->courseRepo->findById($id);
 
         if (!$course) {
+            Response::notFound('Course not found');
+            return;
+        }
+
+
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $course['institution_id'] !== AccessControl::institutionId($user)) {
             Response::notFound('Course not found');
             return;
         }
@@ -336,6 +519,13 @@ class CourseController
         $course = $this->courseRepo->findById($id);
 
         if (!$course) {
+            Response::notFound('Course not found');
+            return;
+        }
+
+
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $course['institution_id'] !== AccessControl::institutionId($user)) {
             Response::notFound('Course not found');
             return;
         }
@@ -374,6 +564,13 @@ class CourseController
         $course = $this->courseRepo->findById($id);
 
         if (!$course) {
+            Response::notFound('Course not found');
+            return;
+        }
+
+
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $course['institution_id'] !== AccessControl::institutionId($user)) {
             Response::notFound('Course not found');
             return;
         }
@@ -428,6 +625,13 @@ class CourseController
         $material = $this->materialRepo->findById($materialId);
 
         if (!$course) {
+            Response::notFound('Course not found');
+            return;
+        }
+
+
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $course['institution_id'] !== AccessControl::institutionId($user)) {
             Response::notFound('Course not found');
             return;
         }
@@ -489,6 +693,13 @@ class CourseController
             return;
         }
 
+
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $course['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Course not found');
+            return;
+        }
+
         if (!$material) {
             Response::notFound('Material not found');
             return;
@@ -519,6 +730,13 @@ class CourseController
         $course = $this->courseRepo->findById($id);
 
         if (!$course) {
+            Response::notFound('Course not found');
+            return;
+        }
+
+
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $course['institution_id'] !== AccessControl::institutionId($user)) {
             Response::notFound('Course not found');
             return;
         }
@@ -555,6 +773,13 @@ class CourseController
         $course = $this->courseRepo->findById($id);
 
         if (!$course) {
+            Response::notFound('Course not found');
+            return;
+        }
+
+
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $course['institution_id'] !== AccessControl::institutionId($user)) {
             Response::notFound('Course not found');
             return;
         }
@@ -606,6 +831,13 @@ class CourseController
             return;
         }
 
+
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $course['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Course not found');
+            return;
+        }
+
         // Get student record
         $student = $this->studentRepo->findByUserId($user['user_id']);
         if (!$student) {
@@ -653,10 +885,28 @@ class CourseController
      */
     public function updateReview(array $user, int $courseId, int $reviewId): void
     {
+        $course = $this->courseRepo->findById($courseId);
+
+        if (!$course) {
+            Response::notFound('Course not found');
+            return;
+        }
+
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $course['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Course not found');
+            return;
+        }
+
         $review = $this->reviewRepo->findById($reviewId);
 
         if (!$review) {
             Response::notFound('Review not found');
+            return;
+        }
+
+        if ((int) ($review['course_id'] ?? 0) !== $courseId) {
+            Response::error('Review does not belong to this course', 400);
             return;
         }
 
@@ -688,10 +938,28 @@ class CourseController
      */
     public function deleteReview(array $user, int $courseId, int $reviewId): void
     {
+        $course = $this->courseRepo->findById($courseId);
+
+        if (!$course) {
+            Response::notFound('Course not found');
+            return;
+        }
+
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $course['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Course not found');
+            return;
+        }
+
         $review = $this->reviewRepo->findById($reviewId);
 
         if (!$review) {
             Response::notFound('Review not found');
+            return;
+        }
+
+        if ((int) ($review['course_id'] ?? 0) !== $courseId) {
+            Response::error('Review does not belong to this course', 400);
             return;
         }
 
@@ -722,6 +990,13 @@ class CourseController
         $course = $this->courseRepo->findById($id);
 
         if (!$course) {
+            Response::notFound('Course not found');
+            return;
+        }
+
+
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $course['institution_id'] !== AccessControl::institutionId($user)) {
             Response::notFound('Course not found');
             return;
         }
@@ -770,6 +1045,13 @@ class CourseController
         $course = $this->courseRepo->findById($id);
 
         if (!$course) {
+            Response::notFound('Course not found');
+            return;
+        }
+
+
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $course['institution_id'] !== AccessControl::institutionId($user)) {
             Response::notFound('Course not found');
             return;
         }
@@ -849,6 +1131,13 @@ class CourseController
             return;
         }
 
+
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $course['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Course not found');
+            return;
+        }
+
         if (!$schedule) {
             Response::notFound('Schedule not found');
             return;
@@ -856,15 +1145,6 @@ class CourseController
 
         if ((int) $schedule['course_id'] !== (int) $courseId) {
             Response::error('Schedule does not belong to this course', 400);
-            return;
-        }
-
-        if (
-            $user['role'] !== 'super_admin'
-            && isset($user['institution_id'], $course['institution_id'])
-            && (int) $course['institution_id'] !== (int) $user['institution_id']
-        ) {
-            Response::forbidden('You can only update schedules in your institution');
             return;
         }
 
@@ -922,6 +1202,13 @@ class CourseController
             return;
         }
 
+
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $course['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::notFound('Course not found');
+            return;
+        }
+
         if (!$schedule) {
             Response::notFound('Schedule not found');
             return;
@@ -929,15 +1216,6 @@ class CourseController
 
         if ((int) $schedule['course_id'] !== (int) $courseId) {
             Response::error('Schedule does not belong to this course', 400);
-            return;
-        }
-
-        if (
-            $user['role'] !== 'super_admin'
-            && isset($user['institution_id'], $course['institution_id'])
-            && (int) $course['institution_id'] !== (int) $user['institution_id']
-        ) {
-            Response::forbidden('You can only delete schedules in your institution');
             return;
         }
 

@@ -5,31 +5,51 @@ namespace App\Controllers;
 use App\Utils\Response;
 use App\Utils\Validator;
 use App\Repositories\GradeScaleRepository;
+use App\Repositories\GradeCategoryRepository;
 use App\Repositories\NotificationRepository;
 use App\Middleware\RoleMiddleware;
+use App\Security\AccessControl;
 
 class GradeScaleController
 {
     private GradeScaleRepository $repo;
     private NotificationRepository $notificationRepo;
+    private GradeCategoryRepository $categoryRepo;
 
     public function __construct()
     {
         $this->repo = new GradeScaleRepository();
         $this->notificationRepo = new NotificationRepository();
+        $this->categoryRepo = new GradeCategoryRepository();
     }
 
     public function index(array $user): void
     {
-        $institutionId = $user['role'] === 'super_admin' ? null : (int) ($user['institution_id'] ?? 0);
-        $scales = $this->repo->getAll($institutionId > 0 ? $institutionId : null);
+        $institutionId = null;
+        if (!AccessControl::isSuperAdmin($user)) {
+            $institutionId = AccessControl::institutionId($user);
+            if ($institutionId <= 0) {
+                Response::forbidden('Institution context is required');
+                return;
+            }
+        }
+
+        $scales = $this->repo->getAll($institutionId);
         Response::success($scales);
     }
 
     public function show(array $user, int $id): void
     {
-        $institutionId = $user['role'] === 'super_admin' ? null : (int) ($user['institution_id'] ?? 0);
-        $scale = $this->repo->findById($id, $institutionId > 0 ? $institutionId : null);
+        $institutionId = null;
+        if (!AccessControl::isSuperAdmin($user)) {
+            $institutionId = AccessControl::institutionId($user);
+            if ($institutionId <= 0) {
+                Response::forbidden('Institution context is required');
+                return;
+            }
+        }
+
+        $scale = $this->repo->findById($id, $institutionId);
 
         if (!$scale) {
             Response::notFound('Grade scale not found');
@@ -48,6 +68,11 @@ class GradeScaleController
         }
 
         $data = json_decode(file_get_contents('php://input'), true);
+
+        if (!is_array($data)) {
+            Response::error('Invalid JSON payload', 400);
+            return;
+        }
 
         $validator = new Validator($data);
         $validator->required(['grade', 'min_score', 'max_score'])
@@ -80,10 +105,29 @@ class GradeScaleController
             return;
         }
 
-        if ($user['role'] !== 'super_admin') {
-            $data['institution_id'] = $user['institution_id'];
-        } elseif (empty($data['institution_id']) && !empty($user['institution_id'])) {
-            $data['institution_id'] = $user['institution_id'];
+        if (!AccessControl::isSuperAdmin($user)) {
+            $data['institution_id'] = AccessControl::institutionId($user);
+        } else {
+            if (isset($data['institution_id'])) {
+                $data['institution_id'] = (int) $data['institution_id'];
+            }
+            if (empty($data['institution_id']) && AccessControl::institutionId($user) > 0) {
+                $data['institution_id'] = AccessControl::institutionId($user);
+            }
+        }
+
+        if (empty($data['institution_id'])) {
+            Response::badRequest('institution_id is required');
+            return;
+        }
+
+        if (!empty($data['grade_categories_id'])) {
+            $categoryId = (int) $data['grade_categories_id'];
+            if ($categoryId <= 0
+                || !$this->categoryRepo->findById($categoryId, (int) $data['institution_id'])) {
+                Response::badRequest('Invalid grade_categories_id for this institution');
+                return;
+            }
         }
 
         $scaleId = $this->repo->create($data);
@@ -120,8 +164,16 @@ class GradeScaleController
             return;
         }
 
-        $institutionId = $user['role'] === 'super_admin' ? null : (int) ($user['institution_id'] ?? 0);
-        $scale = $this->repo->findById($id, $institutionId > 0 ? $institutionId : null);
+        $institutionId = null;
+        if (!AccessControl::isSuperAdmin($user)) {
+            $institutionId = AccessControl::institutionId($user);
+            if ($institutionId <= 0) {
+                Response::forbidden('Institution context is required');
+                return;
+            }
+        }
+
+        $scale = $this->repo->findById($id, $institutionId);
 
         if (!$scale) {
             Response::notFound('Grade scale not found');
@@ -129,6 +181,11 @@ class GradeScaleController
         }
 
         $data = json_decode(file_get_contents('php://input'), true);
+
+        if (!is_array($data)) {
+            Response::error('Invalid JSON payload', 400);
+            return;
+        }
 
         $validator = new Validator($data);
         if (isset($data['grade'])) {
@@ -165,6 +222,17 @@ class GradeScaleController
             return;
         }
 
+        if (array_key_exists('grade_categories_id', $data)
+            && $data['grade_categories_id'] !== null
+            && $data['grade_categories_id'] !== '') {
+            $categoryId = (int) $data['grade_categories_id'];
+            if ($categoryId <= 0
+                || !$this->categoryRepo->findById($categoryId, (int) $scale['institution_id'])) {
+                Response::badRequest('Invalid grade_categories_id for this institution');
+                return;
+            }
+        }
+
         if ($this->repo->update($id, $data)) {
             try {
                 $institutionId = (int) ($scale['institution_id'] ?? ($user['institution_id'] ?? 0));
@@ -194,15 +262,23 @@ class GradeScaleController
             return;
         }
 
-        $institutionId = $user['role'] === 'super_admin' ? null : (int) ($user['institution_id'] ?? 0);
-        $scale = $this->repo->findById($id, $institutionId > 0 ? $institutionId : null);
+        $institutionId = null;
+        if (!AccessControl::isSuperAdmin($user)) {
+            $institutionId = AccessControl::institutionId($user);
+            if ($institutionId <= 0) {
+                Response::forbidden('Institution context is required');
+                return;
+            }
+        }
+
+        $scale = $this->repo->findById($id, $institutionId);
 
         if (!$scale) {
             Response::notFound('Grade scale not found');
             return;
         }
 
-        if ($this->repo->delete($id, $institutionId > 0 ? $institutionId : null)) {
+        if ($this->repo->delete($id, $institutionId)) {
             Response::success(['message' => 'Grade scale deleted successfully']);
         } else {
             Response::serverError('Failed to delete grade scale');

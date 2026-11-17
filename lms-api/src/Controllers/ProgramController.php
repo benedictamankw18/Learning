@@ -3,6 +3,7 @@
 namespace App\Controllers;
 
 use App\Utils\Response;
+use App\Security\AccessControl;
 use App\Utils\Validator;
 use App\Repositories\ProgramRepository;
 use App\Repositories\NotificationRepository;
@@ -49,15 +50,17 @@ class ProgramController
         $limit = isset($_GET['limit']) ? (int) $_GET['limit'] : 20;
         $search = isset($_GET['search']) ? trim((string) $_GET['search']) : '';
         $status = isset($_GET['status']) ? trim((string) $_GET['status']) : '';
-        $institutionId = isset($_GET['institution_id']) ? (int) $_GET['institution_id'] : null;
 
         if (!in_array($status, ['active', 'inactive'], true)) {
             $status = '';
         }
 
-        // Super admin can view all institutions' programs
-        if ($user['role'] !== 'super_admin' && !$institutionId) {
-            $institutionId = $user['institution_id'];
+        // Only super admins may choose an institution. Other users are confined
+        // to their own institution.
+        if (AccessControl::isSuperAdmin($user) && isset($_GET['institution_id'])) {
+            $institutionId = (int) $_GET['institution_id'];
+        } else {
+            $institutionId = AccessControl::institutionId($user);
         }
 
         $programs = $this->repo->getAll($page, $limit, $institutionId, $search, $status);
