@@ -28,6 +28,7 @@ The repository contains the REST API (`lms-api`), the static frontend (`lms-fron
 - [Background Jobs](#background-jobs)
 - [Utility Scripts](#utility-scripts)
 - [Testing and Verification](#testing-and-verification)
+- [Deployment](#deployment)
 - [Troubleshooting](#troubleshooting)
 - [Security Notes](#security-notes)
 - [Project Status and Known Gaps](#project-status-and-known-gaps)
@@ -563,7 +564,17 @@ Additional documentation: `lms-api/scripts/README-ANALYTICS-SEEDING.md`.
 
 ## Testing and Verification
 
-There is currently **no automated test suite or CI pipeline** in this repository. Verify changes manually and with static checks.
+The API ships with a standalone PHP test harness (no PHPUnit or CI dependency) covering access
+control, institution isolation, JWT configuration, refresh-token rotation, and repository
+static checks.
+
+```bash
+# Full harness (needs the schema, including refresh_tokens)
+php lms-api/tests/run.php --db-host=localhost --db-user=root --db-pass=
+```
+
+Exit code `0` means every test passed or skipped; `1` means at least one failed. Database-backed
+tests skip automatically when the database is unavailable.
 
 ### Static checks
 
@@ -602,6 +613,27 @@ mysqladmin -h 127.0.0.1 -P 3306 -u root -p ping
 - [ ] PDF/Excel exports produce valid files
 - [ ] Layout works on mobile, tablet, and desktop
 - [ ] Role restrictions are enforced when navigating directly to another role's pages
+
+---
+
+## Deployment
+
+Detailed deployment and operations procedures live in [`docs/deployment/`](docs/deployment/README.md):
+
+| Guide | Use it for |
+| --- | --- |
+| [`deployed-development.md`](docs/deployment/deployed-development.md) | Running the API and frontend directly on a workstation, including XAMPP/Apache |
+| [`deploy-docker.md`](docs/deployment/deploy-docker.md) | The Docker Compose stack: environment files, build, ports, volumes, migrations, uploads |
+| [`production.md`](docs/deployment/production.md) | Internet-facing deployment: TLS, CORS, secrets, hardening, go-live verification |
+| [`operations.md`](docs/deployment/operations.md) | Backups, restores, migrations, scheduler, monitoring, upgrades, rollback |
+
+The Quick Start and Local Development sections above remain the short path; the deployment
+guides are the detailed procedures.
+
+> **Before exposing the system to real users:** set `APP_ENV=production`, `APP_DEBUG=false`, use
+> a unique `JWT_SECRET` of at least 32 characters, replace `ALLOWED_ORIGINS=*` with an explicit
+> allowlist, serve over HTTPS, and provision a real super admin with
+> `php lms-api/scripts/create_superadmin.php`. See [`production.md`](docs/deployment/production.md).
 
 ---
 
