@@ -286,3 +286,34 @@ test('B7a controllers do not use raw role comparisons for authorization', functi
 
     assertSame([], $offenders, "Raw role checks found:\n" . implode("\n", $offenders));
 });
+
+test('Upload serving refuses path traversal and directory listing', function () {
+    $routerPath = apiRoot() . '/public/router.php';
+    assertTrue(is_file($routerPath), 'Missing public/router.php');
+    $router = (string) file_get_contents($routerPath);
+
+    // Uploaded bytes must be resolved through realpath and confined to the
+    // uploads directory, otherwise "/uploads/../../.env" reads arbitrary files.
+    assertContains('resolveUploadFile', $router, 'router.php should resolve uploads through a containment helper');
+    assertContains('realpath(', $router, 'router.php should canonicalize upload paths');
+    assertContains('str_starts_with($candidate, $basePrefix)', $router, 'router.php should reject paths outside uploads/');
+    assertContains('X-Content-Type-Options: nosniff', $router, 'router.php should send nosniff for uploads');
+
+    // SVG served inline is a stored-XSS vector; it must not be in the mime map.
+    assertFalse(
+        str_contains($router, "'svg' => 'image/svg+xml'"),
+        'router.php must not serve SVG as image/svg+xml'
+    );
+
+    $dockerfilePath = apiRoot() . '/Dockerfile';
+    assertTrue(is_file($dockerfilePath), 'Missing lms-api/Dockerfile');
+    $dockerfile = (string) file_get_contents($dockerfilePath);
+
+    assertContains('Options -Indexes', $dockerfile, 'The uploads directory must not allow directory listing');
+    assertFalse(
+        str_contains($dockerfile, 'Options Indexes'),
+        'The uploads directory must not enable Options Indexes'
+    );
+    assertContains('Require all denied', $dockerfile, 'Script extensions under uploads/ must be denied');
+    assertContains('X-Content-Type-Options "nosniff"', $dockerfile, 'Apache should send nosniff for uploads');
+});

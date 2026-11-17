@@ -33,6 +33,71 @@ function sendCorsHeaders(): void
     header('Access-Control-Max-Age: 3600');
 }
 
+/**
+ * Resolve a path relative to the uploads directory.
+ *
+ * Returns null when the resolved file is missing or lands outside the
+ * uploads directory, so requests such as "/uploads/../../.env" cannot read
+ * arbitrary files on disk.
+ */
+function resolveUploadFile(string $relativePath): ?string
+{
+    $baseDir = realpath(dirname(__DIR__) . DIRECTORY_SEPARATOR . 'uploads');
+    if ($baseDir === false) {
+        return null;
+    }
+
+    $relativePath = str_replace(["\0", '\\'], ['', '/'], $relativePath);
+    if ($relativePath === '') {
+        return null;
+    }
+
+    $candidate = realpath($baseDir . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $relativePath));
+    if ($candidate === false || !is_file($candidate)) {
+        return null;
+    }
+
+    $basePrefix = rtrim($baseDir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR;
+    if (!str_starts_with($candidate, $basePrefix)) {
+        return null;
+    }
+
+    return $candidate;
+}
+
+/**
+ * Stream an uploaded file with safe headers.
+ *
+ * Unknown extensions (including legacy SVG files) are sent as
+ * application/octet-stream with nosniff so they download instead of being
+ * rendered inline as active content.
+ */
+function serveUploadFile(string $filePath): void
+{
+    $mimeMap = [
+        'png' => 'image/png',
+        'jpg' => 'image/jpeg',
+        'jpeg' => 'image/jpeg',
+        'gif' => 'image/gif',
+        'webp' => 'image/webp',
+        'pdf' => 'application/pdf',
+        'doc' => 'application/msword',
+        'docx' => 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    ];
+
+    $origin = $_SERVER['HTTP_ORIGIN'] ?? '';
+    if ($origin) {
+        header('Access-Control-Allow-Origin: ' . $origin);
+        header('Vary: Origin');
+    }
+
+    $extension = strtolower(pathinfo($filePath, PATHINFO_EXTENSION));
+    header('Content-Type: ' . ($mimeMap[$extension] ?? 'application/octet-stream'));
+    header('X-Content-Type-Options: nosniff');
+    header('Content-Length: ' . filesize($filePath));
+    readfile($filePath);
+}
+
 // Get the requested URI
 $uri = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
 
@@ -54,60 +119,29 @@ if (preg_match('#^/api/#', $uri)) {
 // For file uploads directory, serve files directly from lms-api/uploads/
 // Must be checked BEFORE the generic static-file extension check below
 if (preg_match('#^/uploads/#', $uri)) {
-    $filePath = dirname(__DIR__) . str_replace('/', DIRECTORY_SEPARATOR, $uri);
-    if (file_exists($filePath)) {
-        $origin = $_SERVER['HTTP_ORIGIN'] ?? '';
-        if ($origin) {
-            header('Access-Control-Allow-Origin: ' . $origin);
-            header('Vary: Origin');
-        }
-        $ext = strtolower(pathinfo($filePath, PATHINFO_EXTENSION));
-        $mimeMap = [
-            'png'  => 'image/png',
-            'jpg'  => 'image/jpeg',
-            'jpeg' => 'image/jpeg',
-            'gif'  => 'image/gif',
-            'webp' => 'image/webp',
-            'svg'  => 'image/svg+xml',
-            'pdf'  => 'application/pdf',
-            'doc'  => 'application/msword',
-            'docx' => 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-        ];
-        header('Content-Type: ' . ($mimeMap[$ext] ?? 'application/octet-stream'));
-        header('Content-Length: ' . filesize($filePath));
-        readfile($filePath);
+    $filePath = resolveUploadFile(ltrim(substr($uri, strlen('/uploads')), '/'));
+    if ($filePath !== null) {
+        serveUploadFile($filePath);
         return true;
     }
+    http_response_code(404);
+    header('Content-Type: application/json; charset=UTF-8');
+    echo json_encode(['success' => false, 'message' => 'File not found']);
+    return true;
 }
 
 // Backward compatibility: old records may reference /materials/<file>.
 // Map them to /uploads/materials/<file> when running the PHP dev server.
 if (preg_match('#^/materials/#', $uri)) {
-    $legacyPath = '/uploads' . $uri;
-    $filePath = dirname(__DIR__) . str_replace('/', DIRECTORY_SEPARATOR, $legacyPath);
-    if (file_exists($filePath)) {
-        $origin = $_SERVER['HTTP_ORIGIN'] ?? '';
-        if ($origin) {
-            header('Access-Control-Allow-Origin: ' . $origin);
-            header('Vary: Origin');
-        }
-        $ext = strtolower(pathinfo($filePath, PATHINFO_EXTENSION));
-        $mimeMap = [
-            'png'  => 'image/png',
-            'jpg'  => 'image/jpeg',
-            'jpeg' => 'image/jpeg',
-            'gif'  => 'image/gif',
-            'webp' => 'image/webp',
-            'svg'  => 'image/svg+xml',
-            'pdf'  => 'application/pdf',
-            'doc'  => 'application/msword',
-            'docx' => 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-        ];
-        header('Content-Type: ' . ($mimeMap[$ext] ?? 'application/octet-stream'));
-        header('Content-Length: ' . filesize($filePath));
-        readfile($filePath);
+    $filePath = resolveUploadFile('materials/' . ltrim(substr($uri, strlen('/materials')), '/'));
+    if ($filePath !== null) {
+        serveUploadFile($filePath);
         return true;
     }
+    http_response_code(404);
+    header('Content-Type: application/json; charset=UTF-8');
+    echo json_encode(['success' => false, 'message' => 'File not found']);
+    return true;
 }
 
 // For static files (css, js, images), serve them directly from public/
