@@ -83,7 +83,7 @@ Create `.env.docker` and `lms-api/.env.docker` from the templates, then set prod
 | `MAIL_HOST`, `MAIL_PORT`, `MAIL_USERNAME`, `MAIL_PASSWORD` | Real SMTP provider |
 | `MAIL_FROM_ADDRESS` | A monitored sender address |
 | `REPORT_SCHEDULER_AUTO_TRIGGER` | `false` if you run a dedicated scheduler |
-| `MAX_UPLOAD_SIZE` | Match your proxy and PHP limits |
+| `MAX_UPLOAD_SIZE` | Reserved; set PHP `upload_max_filesize` and `post_max_size` to match your proxy limits |
 
 ### Frontend API URL
 
@@ -173,7 +173,7 @@ server {
     ssl_certificate     /etc/letsencrypt/live/api.example.com/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/api.example.com/privkey.pem;
 
-    client_max_body_size 100m;   # must be >= MAX_UPLOAD_SIZE
+    client_max_body_size 100m;   # must be >= PHP upload_max_filesize/post_max_size
 
     add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
     add_header X-Content-Type-Options "nosniff" always;
@@ -214,6 +214,8 @@ Redirect HTTP to HTTPS on both hostnames.
 ### Uploads
 
 - Keep `lms-api/uploads/` on a persistent volume.
+- The API caps individual uploads at 100 MB and the image sets `upload_max_filesize=100M` /
+  `post_max_size=105M`. Keep the reverse proxy `client_max_body_size` at or above that.
 - The bundled Apache config disables directory listings, denies script execution, and sends
   `nosniff`. Do not weaken it.
 - **Known limitation:** files under `/uploads/...` are readable without authentication by

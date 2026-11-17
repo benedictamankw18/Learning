@@ -342,8 +342,8 @@ Used by the `db` service in `docker-compose.yml`.
 | `APP_URL`, `FRONTEND_URL` | Public URLs used in links and emails |
 | `ALLOWED_ORIGINS` | Comma-separated CORS allowlist (`*` allows all) |
 | `MAIL_*` | SMTP host, port, credentials, and sender identity |
-| `STORAGE_TYPE`, `STORAGE_PATH` | Upload storage configuration |
-| `MAX_UPLOAD_SIZE` | Maximum upload size in bytes (default 10 MB) |
+| `STORAGE_TYPE`, `STORAGE_PATH` | Reserved; uploads are always stored in `lms-api/uploads` |
+| `MAX_UPLOAD_SIZE` | Reserved; the effective limit is PHP `upload_max_filesize` / `post_max_size` |
 | `RATE_LIMIT_REQUESTS`, `RATE_LIMIT_WINDOW` | Rate limiting configuration |
 | `DEFAULT_PAGE_SIZE`, `MAX_PAGE_SIZE` | Pagination limits |
 | `REPORT_SCHEDULER_AUTO_TRIGGER` | Trigger the report worker from HTTP requests |

@@ -83,9 +83,12 @@ MAIL_PORT=1025
 MAIL_FROM_ADDRESS=noreply@example.com
 MAIL_FROM_NAME="LMS System"
 
+# Uploads always go to lms-api/uploads; the STORAGE_* and MAX_UPLOAD_SIZE
+# variables are reserved. The effective limit is PHP upload_max_filesize
+# and post_max_size (see your php.ini).
 STORAGE_TYPE=local
-STORAGE_PATH=../storage/uploads
-MAX_UPLOAD_SIZE=10485760
+STORAGE_PATH=../uploads
+MAX_UPLOAD_SIZE=104857600
 
 RATE_LIMIT_REQUESTS=100
 RATE_LIMIT_WINDOW=60

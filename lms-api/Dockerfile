@@ -27,11 +27,22 @@ RUN a2enmod headers \
         > /etc/apache2/conf-available/uploads.conf \
     && a2enconf uploads
 
+# Align PHP limits with the 100 MB ceiling enforced by FileUploadController.
+# Without this the stock image caps uploads at 2 MB / 8 MB post size.
+RUN printf '%s\n' \
+        'upload_max_filesize = 100M' \
+        'post_max_size = 105M' \
+        'memory_limit = 256M' \
+        'max_execution_time = 300' \
+        'max_input_time = 300' \
+        > /usr/local/etc/php/conf.d/lms-uploads.ini
+
 WORKDIR /var/www/html
 
 COPY . .
 
-RUN chown -R www-data:www-data /var/www/html/uploads /var/www/html/logs 2>/dev/null || true \
-    && chmod -R 755 /var/www/html/public /var/www/html/uploads 2>/dev/null || true
+RUN mkdir -p /var/www/html/uploads /var/www/html/logs \
+    && chown -R www-data:www-data /var/www/html/uploads /var/www/html/logs \
+    && chmod -R 755 /var/www/html/public /var/www/html/uploads
 
 EXPOSE 80

@@ -3,6 +3,7 @@
 README.md
 .DS_Store
 logs/*
+uploads/*
 .env
 .env.docker
 vendor/bin

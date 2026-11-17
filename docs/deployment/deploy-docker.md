@@ -50,8 +50,8 @@ Used by the `db` service and by Compose `${...}` interpolation.
 | `APP_URL`, `FRONTEND_URL` | Public URLs used in links and emails |
 | `ALLOWED_ORIGINS` | Comma-separated CORS allowlist — never `*` in production |
 | `MAIL_*` | SMTP settings; the template points at `mailhog:1025` |
-| `STORAGE_TYPE`, `STORAGE_PATH` | Upload storage |
-| `MAX_UPLOAD_SIZE` | Maximum upload size in bytes |
+| `STORAGE_TYPE`, `STORAGE_PATH` | Reserved; uploads always go to `lms-api/uploads`, mounted at `/var/www/html/uploads` |
+| `MAX_UPLOAD_SIZE` | Reserved; the effective limit is PHP `upload_max_filesize` / `post_max_size` (100 MB / 105 MB in the API image) |
 | `RATE_LIMIT_REQUESTS`, `RATE_LIMIT_WINDOW` | Rate limiting |
 | `DEFAULT_PAGE_SIZE`, `MAX_PAGE_SIZE` | Pagination limits |
 | `REPORT_SCHEDULER_AUTO_TRIGGER`, `REPORT_SCHEDULER_TRIGGER_COOLDOWN_SECONDS` | Opportunistic report worker |
@@ -117,6 +117,9 @@ The API image:
 - serves `/uploads` from `/var/www/html/uploads` through an `Alias`
 - disables directory listings and CGI, denies script extensions under `uploads/`, and sends
   `X-Content-Type-Options: nosniff`
+- raises PHP upload limits to `upload_max_filesize=100M`, `post_max_size=105M`,
+  `memory_limit=256M`
+- excludes `uploads/` from the build context, so user files are never baked into the image
 
 ## 5. Database initialization
 
@@ -156,6 +159,8 @@ database first when running against data you care about — see [`operations.md`
 ## 7. Uploads
 
 Uploads are written to `lms-api/uploads/` on the host and served at `/uploads/...`.
+Individual files are capped at 100 MB by the API; PHP is configured for the same limit in the
+API image (`upload_max_filesize=100M`, `post_max_size=105M`).
 
 - New uploads are stored as `uploads/<institution_id>/<category>/<filename>`.
 - Legacy flat uploads can be migrated in place:
