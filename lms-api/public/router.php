@@ -21,7 +21,14 @@ function sendCorsHeaders(): void
             return trim((string) $item, " \t\n\r\0\x0B\"'");
         }, explode(',', $allowedOrigins))));
 
-        if ($origin && in_array($origin, $originsArray, true)) {
+        // Private / LAN origins are allowed so the dev server works from any
+        // machine on the local network, regardless of the server's IP.
+        $isPrivateOrigin = $origin !== '' && preg_match(
+            '#^https?://(?:localhost|127\.0\.0\.1|\[::1\]|10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|172\.(?:1[6-9]|2\d|3[0-1])(?:\.\d{1,3}){2})(:\d+)?$#i',
+            $origin
+        );
+
+        if ($origin && (in_array($origin, $originsArray, true) || $isPrivateOrigin)) {
             header('Access-Control-Allow-Origin: ' . $origin);
             header('Vary: Origin');
         }

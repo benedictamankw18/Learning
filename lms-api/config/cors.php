@@ -28,22 +28,26 @@ $allowedOrigins = array_values(array_filter(array_map(static function ($item): s
 $isWildcard = in_array('*', $allowedOrigins, true);
 $isAllowed = false;
 
+// Private / LAN origins are safe to reflect: they are not internet-routable and
+// this is a self-hosted app that must work from any machine on the local
+// network, regardless of the server's current IP or Wi-Fi. Public origins still
+// require an explicit ALLOWED_ORIGINS entry.
+$privateOriginPattern = '#^https?://(?:localhost|127\.0\.0\.1|\[::1\]|10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|172\.(?:1[6-9]|2\d|3[0-1])(?:\.\d{1,3}){2})(:\d+)?$#i';
+
 if ($origin !== '') {
     if (in_array($origin, $allowedOrigins, true)) {
         $isAllowed = true;
     } elseif ($isDevelopment && $isWildcard) {
         // Reflecting the origin is only acceptable for local development.
         $isAllowed = true;
-    } elseif ($isDevelopment && preg_match(
-        '#^https?://(?:localhost|127\.0\.0\.1|10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|172\.(?:1[6-9]|2\d|3[0-1])(?:\.\d{1,3}){2})(:\d+)?$#i',
-        $origin
-    )) {
-        // Allow local frontend dev servers on any port.
+    } elseif (preg_match($privateOriginPattern, $origin)) {
+        // Allow the frontend to be reached over any private/LAN address.
         $isAllowed = true;
     }
 }
 
-if (!$isDevelopment && ($allowedOrigins === [] || $isWildcard) && $origin !== '') {
+if (!$isDevelopment && ($allowedOrigins === [] || $isWildcard) && $origin !== ''
+    && !preg_match($privateOriginPattern, $origin)) {
     error_log('CORS misconfiguration: ALLOWED_ORIGINS must be an explicit allowlist in production.');
 }
 
