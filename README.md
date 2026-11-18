@@ -287,7 +287,7 @@ The API is available at `http://localhost:8000/api`.
 ```bash
 cd lms-frontend
 cp .env.example .env
-# Edit .env: set API_BASE_URL=http://localhost:8000
+# Edit .env: set API_BASE_URL=auto (or an explicit API URL)
 node scripts/generate-env.js
 ```
 
@@ -327,7 +327,7 @@ Used by the `db` service in `docker-compose.yml`.
 | `DB_NAME` | Database name |
 | `DB_USER` | Application database user |
 | `DB_PASS` | Application database password |
-| `API_BASE_URL` | API base URL used by the Docker Compose configuration |
+| `API_BASE_URL` | API base URL used by the Docker Compose configuration; `auto` derives it from the page host |
 
 ### API (`lms-api/.env`)
 
@@ -354,7 +354,7 @@ Used by the `db` service in `docker-compose.yml`.
 | Variable | Purpose |
 | --- | --- |
 | `APP_ENV` | `development`, `staging`, or `production` |
-| `API_BASE_URL` | Base URL of the API (no trailing slash) |
+| `API_BASE_URL` | `auto` (derive from the page host), an explicit API URL, or a comma-separated fallback list |
 | `MAIL_*` | Optional client-side mail configuration values |
 
 Only `APP_ENV` and `API_BASE_URL` are written to `assets/js/env.js` by the generator.

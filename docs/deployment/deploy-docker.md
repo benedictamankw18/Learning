@@ -36,7 +36,7 @@ Used by the `db` service and by Compose `${...}` interpolation.
 | `DB_NAME` | Database name | `lms` |
 | `DB_USER` | Application database user | `lms_user` |
 | `DB_PASS` | Application database password | `<strong-app-password>` |
-| `API_BASE_URL` | API URL the browser will call | `http://localhost:8081` |
+| `API_BASE_URL` | API URL the browser will call; `auto` derives it from the page host | `auto` |
 
 ### `lms-api/.env.docker` (API container)
 
@@ -67,9 +67,14 @@ value.
 
 ### Frontend API URL
 
-The frontend image receives `API_BASE_URL` as a **build argument** and has no localhost fallback.
-Compose passes `${API_BASE_URL:-http://localhost:8081}` from `.env.docker`. For staging or
-production set it to the real public API URL before building.
+The frontend image receives `API_BASE_URL` as a **build argument**. The default, `auto`, derives the
+API origin from the page's own host: a page served from `http://192.168.1.20:8082` calls
+`http://192.168.1.20:8081`. That means one build works from `localhost` or any LAN IP, even when the
+server's address changes.
+
+Set an explicit URL (for example `https://api.example.com`) when the API is on a different host, or
+provide a comma-separated list to try multiple hosts in order. Compose passes
+`${API_BASE_URL:-auto}` from `.env.docker`.
 
 ## 2. Build and start
 
@@ -101,6 +106,32 @@ docker compose ps
 curl -i http://localhost:8081/api/auth/me   # 401 is expected without a token
 docker compose logs -f api
 ```
+
+### Accessing from another computer (LAN)
+
+Both published ports bind to `0.0.0.0`, so other machines on the same network can use
+`http://<server-ip>:8082`. With `API_BASE_URL=auto`, the frontend automatically calls the API on the
+same host at port `8081`.
+
+1. Find the server's IPv4 address (for example `192.168.10.96`):
+
+   ```powershell
+   Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -notlike '127.*' }
+   ```
+
+2. Allow inbound TCP `8081` and `8082` in Windows Defender Firewall (run PowerShell as
+   Administrator):
+
+   ```powershell
+   New-NetFirewallRule -DisplayName "LMS frontend 8082" -Direction Inbound -Protocol TCP -LocalPort 8082 -Action Allow
+   New-NetFirewallRule -DisplayName "LMS API 8081" -Direction Inbound -Protocol TCP -LocalPort 8081 -Action Allow
+   ```
+
+3. Open `http://<server-ip>:8082` on the other machine. Use the full page name, for example
+   `http://<server-ip>:8082/auth/login.html` — directory URLs such as `/auth/` are not pages.
+
+CORS reflects private/LAN origins automatically (`localhost`, `127.0.0.1`, `10.x`, `192.168.x`,
+`172.16–31.x`). Public domains still must be listed in `ALLOWED_ORIGINS`.
 
 ## 4. Services and volumes
 

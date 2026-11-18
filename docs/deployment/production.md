@@ -94,8 +94,12 @@ to every endpoint itself.
 | --- | --- |
 | Separate API hostname | `https://api.example.com` |
 | Same origin (proxy routes `/api`) | `https://lms.example.com` |
+| LAN / self-hosted (API on same host, port 8081) | `auto` |
 
-It is a Docker **build argument** with no fallback. Set it before building the frontend image:
+`auto` derives the API origin from the page's own host, so one build works from `localhost` or any
+LAN IP. Use an explicit URL for a public deployment.
+
+It is a Docker **build argument**. Set it before building the frontend image:
 
 ```bash
 API_BASE_URL=https://api.example.com docker compose --env-file .env.docker build frontend
