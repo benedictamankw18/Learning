@@ -5,10 +5,40 @@
 const APP_NAME = 'Ghana SHS LMS';
 
 // Environment & API URL are injected by env.js, which must be loaded before this script.
-// There is intentionally no fallback URL: an unset API_BASE_URL is a configuration error.
+// API_BASE_URL may be:
+//   - "auto" or empty -> derive the API origin from the page's own host, so one
+//     build works from localhost, a LAN IP, or any hostname without a rebuild
+//   - a single URL    -> used as-is (for example https://api.example.com)
+//   - a comma list    -> first entry is the primary host, the rest are fallbacks
 const _env        = (typeof window !== 'undefined' && window.ENV_CONFIG) || {};
 const APP_ENV     = _env.APP_ENV      || 'development';
-const API_BASE_URL = String(_env.API_BASE_URL || '').trim().replace(/\/$/, '');
+
+const API_FALLBACK_PORT = 8081;
+
+function buildApiBaseCandidates(configuredValue) {
+    const configured = String(configuredValue || '').trim();
+    const explicit = configured
+        .split(',')
+        .map((value) => value.trim().replace(/\/+$/, ''))
+        .filter((value) => value !== '' && value.toLowerCase() !== 'auto');
+
+    if (explicit.length > 0) {
+        return explicit;
+    }
+
+    if (typeof window !== 'undefined' && window.location) {
+        const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
+        const hostname = String(window.location.hostname || '').trim();
+        if (hostname) {
+            return [`${protocol}//${hostname}:${API_FALLBACK_PORT}`];
+        }
+    }
+
+    return [];
+}
+
+const API_BASE_CANDIDATES = buildApiBaseCandidates(_env.API_BASE_URL);
+const API_BASE_URL = API_BASE_CANDIDATES[0] || '';
 
 
 // API Endpoints
@@ -339,6 +369,7 @@ if (typeof module !== 'undefined' && module.exports) {
         APP_ENV,
         APP_NAME,
         API_BASE_URL,
+        API_BASE_CANDIDATES,
         API_ENDPOINTS,
         STORAGE_KEYS,
         USER_ROLES,

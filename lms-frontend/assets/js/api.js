@@ -6,27 +6,34 @@
 class APIService {
     constructor() {
         this.baseURL = this.normalizeBaseURL(API_BASE_URL);
-        this.baseCandidates = this.buildBaseCandidates(this.baseURL);
+        this.baseCandidates = this.buildBaseCandidates();
         this.timeout = REQUEST_TIMEOUT;
     }
 
     normalizeBaseURL(url) {
-        return String(url || '').trim().replace(/\/$/, '');
+        return String(url || '').trim().replace(/\/+$/, '');
     }
 
-    buildBaseCandidates(primaryBaseURL) {
+    buildBaseCandidates() {
         const candidates = [];
         const addCandidate = (value) => {
-            const normalized = this.normalizeBaseURL(value);
-            if (normalized && !candidates.includes(normalized)) {
-                candidates.push(normalized);
-            }
+            // Accept comma-separated values defensively; config.js normally
+            // already splits them into API_BASE_CANDIDATES.
+            String(value || '').split(',').forEach((item) => {
+                const normalized = this.normalizeBaseURL(item);
+                if (normalized && normalized.toLowerCase() !== 'auto' && !candidates.includes(normalized)) {
+                    candidates.push(normalized);
+                }
+            });
         };
 
-        addCandidate(primaryBaseURL);
+        if (typeof API_BASE_CANDIDATES !== 'undefined' && Array.isArray(API_BASE_CANDIDATES)) {
+            API_BASE_CANDIDATES.forEach(addCandidate);
+        }
+        addCandidate(API_BASE_URL);
 
         // Local fallbacks are a development convenience only. In production the
-        // configured API_BASE_URL must be the single source of truth.
+        // configured API_BASE_URL (or the host-derived origin) is authoritative.
         if (APP_ENV === 'development') {
             if (typeof window !== 'undefined' && window.location) {
                 const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
@@ -153,7 +160,8 @@ class APIService {
     async request(url, options) {
         if (this.baseCandidates.length === 0) {
             throw new Error(
-                'API_BASE_URL is not configured. Set lms-frontend/.env and run ' +
+                'API_BASE_URL is not configured. Set it to "auto" (derive from the page host) ' +
+                'or an explicit URL in lms-frontend/.env, then run ' +
                 'node lms-frontend/scripts/generate-env.js.'
             );
         }

@@ -33,12 +33,16 @@ fs.readFileSync(envFile, 'utf8')
         vars[key] = val;
     });
 
-const required = ['APP_ENV', 'API_BASE_URL'];
+const required = ['APP_ENV'];
 const missing  = required.filter(k => !vars[k]);
 if (missing.length) {
     console.error(`ERROR: Missing required variables in .env: ${missing.join(', ')}`);
     process.exit(1);
 }
+
+// "auto" (or empty) tells the frontend to derive the API origin from the page's
+// own host, so a single build works from localhost, a LAN IP, or any hostname.
+const apiBaseUrl = String(vars.API_BASE_URL || 'auto').trim() || 'auto';
 
 // Optional: local-only quick-login credentials, stored as a JSON object.
 // Example:
@@ -60,7 +64,7 @@ const content = `// AUTO-GENERATED — do not edit manually.
 // Run: node lms-frontend/scripts/generate-env.js
 window.ENV_CONFIG = {
     APP_ENV:      '${vars.APP_ENV}',
-    API_BASE_URL: '${vars.API_BASE_URL}',
+    API_BASE_URL: '${apiBaseUrl}',
     DEMO_CREDENTIALS: ${demoCredentials ? JSON.stringify(demoCredentials) : 'null'},
 };
 `;
@@ -68,4 +72,4 @@ window.ENV_CONFIG = {
 fs.writeFileSync(outFile, content, 'utf8');
 console.log(`✓ env.js written → ${outFile}`);
 console.log(`  APP_ENV:     ${vars.APP_ENV}`);
-console.log(`  API_BASE_URL: ${vars.API_BASE_URL}`);
+console.log(`  API_BASE_URL: ${apiBaseUrl}`);
