@@ -152,7 +152,7 @@ Learning/
 │   │   ├── css/                  # Base, landing, login, policy styles + Tailwind input
 │   │   ├── js/                   # config.js, api.js, auth.js, components.js, utils.js, logger.js
 │   │   ├── img/                  # Images
-│   │   └── vendor/               # Local copies of export libraries
+│   │   └── vendor/               # Vendored libraries served locally (no CDN; see vendor/README.md)
 │   ├── scripts/generate-env.js   # Generates assets/js/env.js from .env
 │   ├── tailwind.config.js
 │   ├── nginx.conf

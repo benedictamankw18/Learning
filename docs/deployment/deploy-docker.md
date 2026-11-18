@@ -131,7 +131,14 @@ same host at port `8081`.
    `http://<server-ip>:8082/auth/login.html` — directory URLs such as `/auth/` are not pages.
 
 CORS reflects private/LAN origins automatically (`localhost`, `127.0.0.1`, `10.x`, `192.168.x`,
-`172.16–31.x`). Public domains still must be listed in `ALLOWED_ORIGINS`.
+`172.16-31.x`). Public domains still must be listed in `ALLOWED_ORIGINS`.
+
+### No internet required
+
+Every third-party front-end library is vendored under `lms-frontend/assets/vendor/` and served by
+nginx: Font Awesome, Chart.js, jsPDF, jsPDF-AutoTable, JSZip, SheetJS, Tailwind Play, and Bootstrap.
+Pages make no CDN requests, so the LMS keeps working on an isolated LAN. Versions, licenses, and
+source URLs are listed in `lms-frontend/assets/vendor/README.md`.
 
 ## 4. Services and volumes
 
