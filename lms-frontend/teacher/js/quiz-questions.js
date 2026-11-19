@@ -5,6 +5,7 @@
     quiz: null,
     questions: [],
     dragFromId: null,
+    expandedQuestionId: null,
     els: {}
   };
 
@@ -66,7 +67,6 @@
     state.els.questionFalseValue = document.getElementById("questionFalseValue");
 
     state.els.questionListBody = document.getElementById("questionListBody");
-    state.els.questionDetails = document.getElementById("questionDetails");
 
     return true;
   }
@@ -198,14 +198,7 @@
       });
   }
 
-  function renderQuestionDetails(questionId) {
-    const q = state.questions.find((item) => String(item.id) === String(questionId));
-    if (!q) {
-      state.els.questionDetails.className = "tqq-details";
-      state.els.questionDetails.innerHTML = "";
-      return;
-    }
-
+  function buildQuestionDetailsHtml(q) {
     let optionsHtml = "";
     if (Array.isArray(q.options) && q.options.length > 0) {
       optionsHtml = "<div><strong>Options</strong><ul>" + q.options.map((opt) => {
@@ -218,7 +211,7 @@
       ? ('<p><strong>Image:</strong> <a href="' + escapeHtml(imageValue) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(imageValue) + '</a></p>')
       : "<p><strong>Image:</strong> -</p>";
 
-    const detailsHtml = [
+    return [
       "<h4>Question Details</h4>",
       "<p><strong>Text:</strong> " + escapeHtml(q.question_text) + "</p>",
       imageHtml,
@@ -229,9 +222,6 @@
       optionsHtml,
       q.explanation ? ("<p><strong>Explanation:</strong> " + escapeHtml(q.explanation) + "</p>") : ""
     ].join("");
-
-    state.els.questionDetails.innerHTML = detailsHtml;
-    state.els.questionDetails.className = "tqq-details show";
   }
 
   function renderQuestionList() {
@@ -249,20 +239,27 @@
       const preview = q.question_text.length > 95
         ? q.question_text.slice(0, 95) + "..."
         : q.question_text;
+      const isExpanded = String(state.expandedQuestionId) === String(q.id);
 
-      return [
+      const row = [
         "<div class=\"tqq-row\" draggable=\"true\" data-id=\"" + q.id + "\">",
         "<div>" + (index + 1) + "</div>",
         "<div class=\"tqq-title\"><strong>" + escapeHtml(preview) + "</strong><span>Drag row to reorder</span></div>",
         "<div>" + escapeHtml(getTypeLabel(q.question_type)) + "</div>",
         "<div>" + escapeHtml(q.points) + "</div>",
         "<div class=\"tqq-actions\">",
-        "<button class=\"tqq-icon\" data-action=\"view\" data-id=\"" + q.id + "\" title=\"View\"><i class=\"fas fa-eye\"></i></button>",
+        "<button class=\"tqq-icon" + (isExpanded ? " active" : "") + "\" data-action=\"view\" data-id=\"" + q.id + "\" title=\"" + (isExpanded ? "Hide" : "View") + "\"><i class=\"fas fa-eye\"></i></button>",
         "<button class=\"tqq-icon\" data-action=\"edit\" data-id=\"" + q.id + "\" title=\"Edit\"><i class=\"fas fa-pen\"></i></button>",
         "<button class=\"tqq-icon danger\" data-action=\"delete\" data-id=\"" + q.id + "\" title=\"Delete\"><i class=\"fas fa-trash\"></i></button>",
         "</div>",
         "</div>"
       ].join("");
+
+      const details = isExpanded
+        ? "<div class=\"tqq-row-details\">" + buildQuestionDetailsHtml(q) + "</div>"
+        : "";
+
+      return row + details;
     }).join("");
 
     updateSubtitle();
@@ -521,9 +518,8 @@
         resetForm();
       }
 
+      state.expandedQuestionId = null;
       await loadQuestions();
-      state.els.questionDetails.className = "tqq-details";
-      state.els.questionDetails.innerHTML = "";
       setNotice("Question deleted.", "success");
     } catch (error) {
       setNotice(error.message || "Could not delete question.", "error");
@@ -681,7 +677,10 @@
     const questionId = button.dataset.id;
 
     if (action === "view") {
-      renderQuestionDetails(questionId);
+      state.expandedQuestionId = String(state.expandedQuestionId) === String(questionId)
+        ? null
+        : questionId;
+      renderQuestionList();
       return;
     }
 
@@ -890,8 +889,7 @@
     bindBankPickerEvents();
 
     resetForm();
-    state.els.questionDetails.className = "tqq-details";
-    state.els.questionDetails.innerHTML = "";
+    state.expandedQuestionId = null;
 
     try {
       await loadQuiz();
