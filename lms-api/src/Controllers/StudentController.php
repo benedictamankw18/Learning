@@ -3,12 +3,14 @@
 namespace App\Controllers;
 
 use App\Utils\Response;
+use App\Utils\StudentId;
 use App\Utils\Validator;
 use App\Utils\UuidHelper;
 use App\Repositories\StudentRepository;
 use App\Repositories\UserRepository;
 use App\Repositories\ClassRepository;
 use App\Repositories\CourseRepository;
+use App\Repositories\InstitutionRepository;
 use App\Middleware\RoleMiddleware;
 use App\Security\AccessControl;
 
@@ -18,6 +20,7 @@ class StudentController
     private UserRepository $userRepo;
     private ClassRepository $classRepo;
     private CourseRepository $courseRepo;
+    private InstitutionRepository $institutionRepo;
 
     public function __construct()
     {
@@ -25,6 +28,7 @@ class StudentController
         $this->userRepo    = new UserRepository();
         $this->classRepo   = new ClassRepository();
         $this->courseRepo  = new CourseRepository();
+        $this->institutionRepo = new InstitutionRepository();
     }
 
     public function index(array $user): void
@@ -204,7 +208,7 @@ class StudentController
         $data = json_decode(file_get_contents('php://input'), true);
 
         $validator = new Validator($data);
-        $validator->required(['username', 'email', 'password', 'first_name', 'last_name', 'student_id_number'])
+        $validator->required(['username', 'email', 'password', 'first_name', 'last_name'])
             ->email('email')
             ->min('password', 8);
 
@@ -218,8 +222,23 @@ class StudentController
             $data['institution_id'] = $user['institution_id'];
         }
 
-        // Check for duplicate username / email before attempting the INSERT
         $institutionId = isset($data['institution_id']) ? (int) $data['institution_id'] : null;
+
+        // Student IDs are optional. When the form or CSV leaves the column
+        // blank, derive the school prefix (e.g. PSHST-2026-0001) instead of
+        // falling back to a generic "STU" value.
+        $data['student_id_number'] = trim((string) ($data['student_id_number'] ?? ''));
+        if ($data['student_id_number'] === '') {
+            if ($institutionId === null || $institutionId <= 0) {
+                Response::validationError([
+                    'student_id_number' => 'An institution is required to generate a student ID',
+                ]);
+                return;
+            }
+            $data['student_id_number'] = $this->nextStudentIdNumber($institutionId);
+        }
+
+        // Check for duplicate username / email before attempting the INSERT
         $duplicates = [];
         if ($this->userRepo->isUsernameTaken($data['username'], $institutionId)) {
             $duplicates['username'] = 'Username is already taken';
@@ -257,21 +276,9 @@ class StudentController
             return;
         }
 
-        // Check if a student profile already exists for this user
-        if ($this->studentRepo->findByUserId($userId)) {
-            Response::validationError(['email' => ['A student profile already exists for this user account']]);
-            return;
-        }
-
-        // Assign student role
-        $studentRole = $this->userRepo->getRoleByName('student');
-        if ($studentRole) {
-            $this->userRepo->assignRole($userId, (int) $studentRole['role_id']);
-        } else {
-            $this->userRepo->assignRole($userId, 4);
-        }
-
-        // Create student profile
+        // Create the student profile before assigning the role. assignRole()
+        // ensures a profile exists for student-like roles, so doing it first
+        // would create a second, conflicting row.
         $studentId = $this->studentRepo->create($userId, $data);
 
         if (!$studentId) {
@@ -281,6 +288,14 @@ class StudentController
             }
             Response::serverError('Failed to create student profile');
             return;
+        }
+
+        // Assign student role (profile creation is now a no-op)
+        $studentRole = $this->userRepo->getRoleByName('student');
+        if ($studentRole) {
+            $this->userRepo->assignRole($userId, (int) $studentRole['role_id']);
+        } else {
+            $this->userRepo->assignRole($userId, 4);
         }
 
         $student = $this->studentRepo->findById($studentId);
@@ -603,25 +618,35 @@ class StudentController
         }
 
         $institutionId = (int) $user['institution_id'];
-        $year = (int) date('Y');
-
-        // Fetch institution name to derive prefix (same logic as frontend)
-        $fullUser = $this->userRepo->findById($user['user_id']);
-        $institutionName = $fullUser['institution_name'] ?? '';
-
-        $prefix = 'SHS';
-        if ($institutionName !== '') {
-            preg_match_all('/\b[A-Za-z]/', $institutionName, $matches);
-            $initials = $matches[0] ?? [];
-            if (count($initials) >= 2) {
-                $prefix = strtoupper(implode('', array_slice($initials, 0, 6)));
-            }
+        if ($institutionId <= 0) {
+            Response::validationError([
+                'institution_id' => 'An institution is required to generate a student ID',
+            ]);
+            return;
         }
 
-        $seq    = $this->studentRepo->getNextIdSequence($institutionId, $prefix, $year);
-        $nextId = sprintf('%s-%d-%04d', $prefix, $year, $seq);
+        Response::success(['next_id' => $this->nextStudentIdNumber($institutionId)]);
+    }
 
-        Response::success(['next_id' => $nextId]);
+    /**
+     * Build the next student index number for an institution.
+     *
+     * Format: {institution initials}-{year}-{sequence}, e.g. PSHST-2026-0001.
+     * Shared by the "Add student" modal and the create/import endpoint so the
+     * two paths cannot drift apart.
+     */
+    private function nextStudentIdNumber(int $institutionId): string
+    {
+        $institution = $this->institutionRepo->findById($institutionId);
+        $prefix = StudentId::prefixFromInstitution(
+            (string) ($institution['institution_name'] ?? ''),
+            (string) ($institution['institution_code'] ?? '')
+        );
+
+        $year = (int) date('Y');
+        $sequence = $this->studentRepo->getNextIdSequence($institutionId, $prefix, $year);
+
+        return StudentId::format($prefix, $year, $sequence);
     }
 
     /**

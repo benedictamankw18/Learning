@@ -979,7 +979,7 @@
         setText('confirmImportText', 'Importing…');
 
         const results = []; // { row, name, status: 'success'|'failed', reason }
-        const REQUIRED = ['first_name', 'last_name', 'email', 'student_id_number', 'username', 'password'];
+        const REQUIRED = ['first_name', 'last_name', 'email', 'username', 'password'];
 
         for (let i = 0; i < S.importRows.length; i++) {
             const row  = S.importRows[i];
@@ -1070,7 +1070,10 @@
 
     function downloadCsvTemplate() {
         const headers = 'first_name,last_name,email,username,password,student_id_number,class_id,gender,date_of_birth,phone_number,parent_name,parent_phone,parent_email,enrollment_date';
-        const sample  = 'Kwame,Mensah,kwame.mensah@school.edu.gh,kwame.mensah,Password123,SHS2024001,,male,2008-05-15,0244123456,Mrs. Mensah,0244987654,mensah@gmail.com,2024-09-01';
+        // Leave student_id_number blank to auto-generate the school's index
+        // number (for example PSHST-2026-0001). Fill it in only when the
+        // school already has an official ID to keep.
+        const sample  = 'Kwame,Mensah,kwame.mensah@school.edu.gh,kwame.mensah,Password123,,,male,2008-05-15,0244123456,Mrs. Mensah,0244987654,mensah@gmail.com,2024-09-01';
         downloadCsv(`${headers}\n${sample}`, 'students_import_template.csv');
     }
 
@@ -1150,12 +1153,14 @@
         let prefix = 'SHS';
         try {
             const user = Auth.getUser();
-            const name = (user && user.institution_name) ? user.institution_name : '';
-            if (name) {
-                const initials = name.match(/\b[A-Za-z]/g);
-                if (initials && initials.length >= 2) {
-                    prefix = initials.join('').toUpperCase().slice(0, 6);
-                }
+            const name = (user && user.institution_name) ? String(user.institution_name) : '';
+            const code = (user && user.institution_code) ? String(user.institution_code) : '';
+            const initials = name.match(/\b[A-Za-z]/g) || [];
+            if (initials.length >= 2) {
+                prefix = initials.join('').toUpperCase().slice(0, 6);
+            } else {
+                const fallback = (name.replace(/[^A-Za-z0-9]/g, '') || code.replace(/[^A-Za-z0-9]/g, '')).toUpperCase();
+                if (fallback) prefix = fallback.slice(0, 6);
             }
         } catch (_) {}
         return `${prefix}-${year}-${String(next).padStart(4, '0')}`;

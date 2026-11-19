@@ -554,7 +554,7 @@
                         <label>Student ID Number <span class="required">*</span></label>
                         <div style="display:flex;gap:.5rem;align-items:flex-start">
                             <div style="flex:1">
-                                <input type="text" class="form-input" id="sfStudentId" placeholder="e.g. SHS2024001" required>
+                                <input type="text" class="form-input" id="sfStudentId" placeholder="e.g. PSHST-2026-0001" required>
                             </div>
                             <button type="button" id="sfStudentIdGenerate" class="btn btn-outline btn-sm" title="Generate ID" style="white-space:nowrap;flex-shrink:0;height:36px">
                                 <i class="fas fa-sync-alt"></i>
@@ -659,6 +659,8 @@
             <p style="font-size:.875rem;color:var(--text-secondary,#64748b);margin:0 0 1rem">
                 Upload a CSV file with student data. Download the
                 <a href="#" id="downloadTemplateLink" style="color:var(--primary,#3b82f6)">template</a> to get started.
+                Leave <code>student_id_number</code> blank to generate the school's index number automatically
+                (for example <code>PSHST-2026-0001</code>).
             </p>
             <div class="import-drop-zone" id="importDropZone">
                 <i class="fas fa-cloud-upload-alt"></i>

@@ -3,6 +3,7 @@
 namespace App\Repositories;
 
 use App\Config\Database;
+use App\Utils\StudentId;
 use App\Utils\UuidHelper;
 use PDO;
 
@@ -567,7 +568,7 @@ class StudentRepository
                 FROM students
                 WHERE institution_id = :institution_id
                   AND student_id_number LIKE :like
-                ORDER BY student_id_number DESC
+                ORDER BY CAST(SUBSTRING_INDEX(student_id_number, '-', -1) AS UNSIGNED) DESC
                 LIMIT 1
             ");
             $stmt->bindValue(':institution_id', $institutionId, PDO::PARAM_INT);
@@ -578,9 +579,9 @@ class StudentRepository
                 return 1;
             }
             // Extract sequence from the last segment e.g. "ASHS-2026-0042" → 42
-            $parts = explode('-', $row['student_id_number']);
-            $seq = (int) end($parts);
-            return $seq + 1;
+            $seq = StudentId::parseSequence((string) $row['student_id_number'], $prefix, $year);
+
+            return $seq > 0 ? $seq + 1 : 1;
         } catch (\PDOException $e) {
             error_log("Get Next ID Sequence Error: " . $e->getMessage());
             return 1;

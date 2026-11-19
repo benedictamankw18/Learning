@@ -3,6 +3,7 @@
 namespace App\Repositories;
 
 use App\Config\Database;
+use App\Utils\StudentId;
 use App\Utils\UuidHelper;
 use PDO;
 
@@ -292,32 +293,38 @@ class UserRepository
     private function generateStudentIdNumber(int $institutionId): string
     {
         $year = date('Y');
-        $prefix = "STU-{$year}-";
+
+        $institutionStmt = $this->db->prepare("
+            SELECT institution_name, institution_code
+            FROM institutions
+            WHERE institution_id = :institution_id
+            LIMIT 1
+        ");
+        $institutionStmt->execute(['institution_id' => $institutionId]);
+        $institution = $institutionStmt->fetch(PDO::FETCH_ASSOC) ?: [];
+
+        $prefix = StudentId::prefixFromInstitution(
+            (string) ($institution['institution_name'] ?? ''),
+            (string) ($institution['institution_code'] ?? '')
+        );
 
         $stmt = $this->db->prepare("
             SELECT student_id_number
             FROM students
             WHERE institution_id = :institution_id
               AND student_id_number LIKE :prefix
-            ORDER BY student_id_number DESC
+            ORDER BY CAST(SUBSTRING_INDEX(student_id_number, '-', -1) AS UNSIGNED) DESC
             LIMIT 1
         ");
         $stmt->execute([
             'institution_id' => $institutionId,
-            'prefix' => $prefix . '%'
+            'prefix' => $prefix . '-' . $year . '-%'
         ]);
 
         $last = (string) ($stmt->fetch(PDO::FETCH_ASSOC)['student_id_number'] ?? '');
-        $seq = 1;
-        if ($last !== '') {
-            $parts = explode('-', $last);
-            $tail = end($parts);
-            if (is_numeric($tail)) {
-                $seq = ((int) $tail) + 1;
-            }
-        }
+        $seq = StudentId::parseSequence($last, $prefix, $year) + 1;
 
-        return $prefix . str_pad((string) $seq, 4, '0', STR_PAD_LEFT);
+        return StudentId::format($prefix, $year, $seq);
     }
 
     private function ensureStudentRecordForUser(int $userId): bool
@@ -342,8 +349,7 @@ class UserRepository
                 return false;
             }
 
-            $institutionId    = (int) $u['institution_id'];
-            $studentIdNumber  = $this->generateStudentIdNumber($institutionId);
+            $institutionId = (int) $u['institution_id'];
 
             $insertStmt = $this->db->prepare("
                 INSERT INTO students (
@@ -355,14 +361,30 @@ class UserRepository
                 )
             ");
 
-            return $insertStmt->execute([
-                'uuid'            => UuidHelper::generate(),
-                'institution_id'  => $institutionId,
-                'user_id'         => $userId,
-                'student_id_number' => $studentIdNumber,
-                'enrollment_date' => date('Y-m-d'),
-                'status'          => 'active',
-            ]);
+            // The unique key on (student_id_number, institution_id) protects
+            // against a concurrent request taking the same sequence between
+            // our SELECT and INSERT. Retry once with a freshly generated ID.
+            for ($attempt = 0; $attempt < 2; $attempt++) {
+                $studentIdNumber = $this->generateStudentIdNumber($institutionId);
+
+                try {
+                    return $insertStmt->execute([
+                        'uuid'            => UuidHelper::generate(),
+                        'institution_id'  => $institutionId,
+                        'user_id'         => $userId,
+                        'student_id_number' => $studentIdNumber,
+                        'enrollment_date' => date('Y-m-d'),
+                        'status'          => 'active',
+                    ]);
+                } catch (\PDOException $e) {
+                    if ($attempt === 0 && (int) ($e->errorInfo[1] ?? 0) === 1062) {
+                        continue;
+                    }
+                    throw $e;
+                }
+            }
+
+            return false;
         } catch (\PDOException $e) {
             error_log("Ensure Student Record Error: " . $e->getMessage());
             return false;
