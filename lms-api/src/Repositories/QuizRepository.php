@@ -497,6 +497,129 @@ class QuizRepository
     }
 
     /**
+     * Append pre-validated questions to a quiz.
+     *
+     * Duplicate question text is skipped so re-importing the same file is
+     * idempotent. Each insert runs inside a savepoint, so one bad row cannot
+     * discard the rows that already succeeded.
+     *
+     * @param array<int,array{row:int,question:array<string,mixed>}> $rows
+     * @return array{imported:int,skipped:int,failed:int,results:array<int,array<string,mixed>>}
+     */
+    public function importQuestions(int $quizId, array $rows): array
+    {
+        $ownsTransaction = !$this->db->inTransaction();
+        if ($ownsTransaction) {
+            $this->db->beginTransaction();
+        }
+
+        $imported = 0;
+        $skipped = 0;
+        $failed = 0;
+        $results = [];
+
+        try {
+            $stmt = $this->db->prepare("
+                SELECT COALESCE(MAX(order_index), -1)
+                FROM quiz_questions
+                WHERE quiz_id = :quiz_id
+            ");
+            $stmt->execute(['quiz_id' => $quizId]);
+            $nextOrder = (int) $stmt->fetchColumn() + 1;
+
+            $stmt = $this->db->prepare("
+                SELECT question_text
+                FROM quiz_questions
+                WHERE quiz_id = :quiz_id
+            ");
+            $stmt->execute(['quiz_id' => $quizId]);
+
+            $existing = [];
+            foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) as $text) {
+                $existing[$this->normalizeQuestionTextKey((string) $text)] = true;
+            }
+
+            foreach ($rows as $index => $row) {
+                $rowNumber = (int) ($row['row'] ?? 0);
+                $question = is_array($row['question'] ?? null) ? $row['question'] : [];
+                $text = (string) ($question['question_text'] ?? '');
+                $key = $this->normalizeQuestionTextKey($text);
+
+                if ($text === '') {
+                    $failed++;
+                    $results[] = [
+                        'row' => $rowNumber,
+                        'status' => 'failed',
+                        'message' => 'question_text is required.',
+                    ];
+                    continue;
+                }
+
+                if (isset($existing[$key])) {
+                    $skipped++;
+                    $results[] = [
+                        'row' => $rowNumber,
+                        'status' => 'skipped',
+                        'message' => 'A question with this text already exists in this quiz.',
+                    ];
+                    continue;
+                }
+
+                $savepoint = 'q_import_' . (int) $index;
+                $this->db->exec('SAVEPOINT ' . $savepoint);
+
+                try {
+                    $question['quiz_id'] = $quizId;
+                    $question['order_index'] = $nextOrder;
+                    $this->addQuestion($question);
+
+                    $existing[$key] = true;
+                    $nextOrder++;
+                    $imported++;
+                    $results[] = [
+                        'row' => $rowNumber,
+                        'status' => 'imported',
+                        'message' => 'Question imported.',
+                    ];
+
+                    $this->db->exec('RELEASE SAVEPOINT ' . $savepoint);
+                } catch (\Throwable $e) {
+                    $this->db->exec('ROLLBACK TO SAVEPOINT ' . $savepoint);
+                    $this->db->exec('RELEASE SAVEPOINT ' . $savepoint);
+
+                    $failed++;
+                    $results[] = [
+                        'row' => $rowNumber,
+                        'status' => 'failed',
+                        'message' => 'Could not save this question.',
+                    ];
+                }
+            }
+
+            if ($ownsTransaction) {
+                $this->db->commit();
+            }
+        } catch (\Throwable $e) {
+            if ($ownsTransaction && $this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            throw $e;
+        }
+
+        return [
+            'imported' => $imported,
+            'skipped' => $skipped,
+            'failed' => $failed,
+            'results' => $results,
+        ];
+    }
+
+    private function normalizeQuestionTextKey(string $text): string
+    {
+        return mb_strtolower(trim($text));
+    }
+
+    /**
      * Update question by ID
      */
     public function updateQuestion(int $questionId, array $data): bool

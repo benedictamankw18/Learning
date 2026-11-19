@@ -80,6 +80,17 @@
             questionPublishQuizBtn: document.getElementById('questionPublishQuizBtn'),
             questionViewResultsBtn: document.getElementById('questionViewResultsBtn'),
             questionExportResultsBtn: document.getElementById('questionExportResultsBtn'),
+            questionImportBtn: document.getElementById('questionImportBtn'),
+            questionExportBtn: document.getElementById('questionExportBtn'),
+
+            questionImportModal: document.getElementById('quizQuestionImportModal'),
+            questionImportQuizTitle: document.getElementById('questionImportQuizTitle'),
+            questionImportFile: document.getElementById('questionImportFile'),
+            questionImportTemplateBtn: document.getElementById('questionImportTemplateBtn'),
+            questionImportResults: document.getElementById('questionImportResults'),
+            questionImportConfirmBtn: document.getElementById('questionImportConfirmBtn'),
+            questionImportCloseBtn: document.getElementById('questionImportModalCloseBtn'),
+            questionImportCancelBtn: document.getElementById('questionImportCancelBtn'),
 
             deleteConfirmModal: document.getElementById('deleteConfirmModal'),
             deleteConfirmText: document.getElementById('deleteConfirmText'),
@@ -391,6 +402,42 @@
                     return;
                 }
                 window.location.hash = `#quiz-details?id=${state.selectedQuizId}`;
+            });
+        }
+
+        if (elements.questionImportBtn) {
+            elements.questionImportBtn.addEventListener('click', openQuestionImportModal);
+        }
+
+        if (elements.questionExportBtn) {
+            elements.questionExportBtn.addEventListener('click', exportQuestionsCsv);
+        }
+
+        if (elements.questionImportCloseBtn) {
+            elements.questionImportCloseBtn.addEventListener('click', closeQuestionImportModal);
+        }
+
+        if (elements.questionImportCancelBtn) {
+            elements.questionImportCancelBtn.addEventListener('click', closeQuestionImportModal);
+        }
+
+        if (elements.questionImportFile) {
+            elements.questionImportFile.addEventListener('change', syncQuestionImportButton);
+        }
+
+        if (elements.questionImportTemplateBtn) {
+            elements.questionImportTemplateBtn.addEventListener('click', downloadQuestionImportTemplate);
+        }
+
+        if (elements.questionImportConfirmBtn) {
+            elements.questionImportConfirmBtn.addEventListener('click', importQuestionsCsv);
+        }
+
+        if (elements.questionImportModal) {
+            elements.questionImportModal.addEventListener('click', (event) => {
+                if (event.target === elements.questionImportModal) {
+                    closeQuestionImportModal();
+                }
             });
         }
 
@@ -950,10 +997,187 @@
 
         elements.questionModal.classList.remove('open');
         elements.questionModal.setAttribute('aria-hidden', 'true');
+        closeQuestionImportModal();
         state.selectedQuizId = null;
         state.selectedQuizTitle = '';
         state.currentQuestionRows = [];
         resetQuestionForm();
+    }
+
+    function openQuestionImportModal() {
+        if (!state.selectedQuizId || !elements.questionImportModal) {
+            return;
+        }
+
+        if (elements.questionImportQuizTitle) {
+            elements.questionImportQuizTitle.textContent = state.selectedQuizTitle || `Quiz ${state.selectedQuizId}`;
+        }
+
+        if (elements.questionImportFile) {
+            elements.questionImportFile.value = '';
+        }
+
+        if (elements.questionImportResults) {
+            elements.questionImportResults.innerHTML = '';
+            elements.questionImportResults.style.display = 'none';
+        }
+
+        if (elements.questionImportConfirmBtn) {
+            elements.questionImportConfirmBtn.disabled = true;
+            elements.questionImportConfirmBtn.textContent = 'Import Questions';
+        }
+
+        elements.questionImportModal.classList.add('open');
+        elements.questionImportModal.setAttribute('aria-hidden', 'false');
+    }
+
+    function closeQuestionImportModal() {
+        if (!elements.questionImportModal) {
+            return;
+        }
+
+        elements.questionImportModal.classList.remove('open');
+        elements.questionImportModal.setAttribute('aria-hidden', 'true');
+    }
+
+    function syncQuestionImportButton() {
+        const file = elements.questionImportFile && elements.questionImportFile.files
+            ? elements.questionImportFile.files[0]
+            : null;
+        const isCsv = !!file && /\.csv$/i.test(file.name);
+
+        if (elements.questionImportConfirmBtn) {
+            elements.questionImportConfirmBtn.disabled = !isCsv;
+        }
+    }
+
+    async function downloadQuestionImportTemplate() {
+        const quizId = Number(state.selectedQuizId || 0);
+        if (!quizId) {
+            return;
+        }
+
+        try {
+            await QuizAPI.downloadImportTemplate(quizId);
+            showNotice('Import template downloaded.', 'success');
+        } catch (error) {
+            console.error('Failed to download the question import template:', error);
+            showNotice(error.message || 'Failed to download the import template.', 'error');
+        }
+    }
+
+    async function exportQuestionsCsv() {
+        const quizId = Number(state.selectedQuizId || 0);
+        if (!quizId) {
+            return;
+        }
+
+        try {
+            await QuizAPI.exportQuestions(quizId);
+            showNotice('Questions exported as CSV.', 'success');
+        } catch (error) {
+            console.error('Failed to export quiz questions:', error);
+            showNotice(error.message || 'Failed to export questions.', 'error');
+        }
+    }
+
+    async function importQuestionsCsv() {
+        const quizId = Number(state.selectedQuizId || 0);
+        const file = elements.questionImportFile && elements.questionImportFile.files
+            ? elements.questionImportFile.files[0]
+            : null;
+
+        if (!quizId) {
+            showNotice('No quiz selected for question import.', 'error');
+            return;
+        }
+
+        if (!file) {
+            showNotice('Choose a CSV file to import.', 'error');
+            return;
+        }
+
+        if (!/\.csv$/i.test(file.name)) {
+            showNotice('Please choose a .csv file.', 'error');
+            return;
+        }
+
+        const formData = new FormData();
+        formData.append('file', file);
+
+        const button = elements.questionImportConfirmBtn;
+        const originalLabel = button ? button.textContent : '';
+
+        if (button) {
+            button.disabled = true;
+            button.textContent = 'Importing...';
+        }
+
+        try {
+            const response = await QuizAPI.importQuestions(quizId, formData);
+            const data = response && response.data ? response.data : {};
+            const imported = Number(data.imported || 0);
+            const skipped = Number(data.skipped || 0);
+            const failed = Number(data.failed || 0);
+
+            renderQuestionImportResults(data);
+            showNotice(
+                `Imported ${imported}, skipped ${skipped}, failed ${failed}.`,
+                failed > 0 ? 'error' : 'success'
+            );
+
+            if (imported > 0) {
+                await loadQuestions(quizId);
+            }
+
+            if (elements.questionImportFile) {
+                elements.questionImportFile.value = '';
+            }
+        } catch (error) {
+            console.error('Failed to import quiz questions:', error);
+            renderQuestionImportResults({
+                imported: 0,
+                skipped: 0,
+                failed: 1,
+                results: [{
+                    row: '-',
+                    status: 'failed',
+                    message: error.message || 'The import request failed.'
+                }]
+            });
+            showNotice(error.message || 'Failed to import questions.', 'error');
+        } finally {
+            if (button) {
+                button.textContent = originalLabel || 'Import Questions';
+                syncQuestionImportButton();
+            }
+        }
+    }
+
+    function renderQuestionImportResults(data) {
+        const target = elements.questionImportResults;
+        if (!target) {
+            return;
+        }
+
+        const imported = Number(data.imported || 0);
+        const skipped = Number(data.skipped || 0);
+        const failed = Number(data.failed || 0);
+        const results = Array.isArray(data.results) ? data.results : [];
+
+        const summary = `Imported ${imported} · Skipped ${skipped} · Failed ${failed}`;
+        const rows = results.map((result) => {
+            const status = String(result.status || 'failed').toLowerCase();
+            const safeStatus = ['imported', 'skipped', 'failed'].includes(status) ? status : 'failed';
+            return `<div class="tq-import-results-row ${safeStatus}">
+                <strong>Row ${escapeHtml(result.row)}:</strong>
+                ${escapeHtml(safeStatus)} — ${escapeHtml(result.message || '')}
+            </div>`;
+        }).join('');
+
+        target.innerHTML = `<div style="font-weight:600; margin-bottom:0.35rem">${escapeHtml(summary)}</div>`
+            + (rows || '<div class="tq-hint">No row details were returned.</div>');
+        target.style.display = 'block';
     }
 
     async function loadQuestions(quizId) {

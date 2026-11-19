@@ -9,6 +9,7 @@ use App\Repositories\TeacherRepository;
 use App\Repositories\StudentRepository;
 use App\Utils\Response;
 use App\Utils\Validator;
+use App\Utils\QuestionCsv;
 use App\Middleware\RoleMiddleware;
 use App\Security\AccessControl;
 use DateTime;
@@ -944,6 +945,226 @@ class QuizController
             'message' => 'Question added successfully',
             'question_id' => $questionId
         ], 201);
+    }
+
+    /**
+     * Import questions from a CSV file (teacher/admin)
+     * POST /quizzes/{id}/questions/import
+     */
+    public function importQuestions(array $user, int $id): void
+    {
+        $quiz = $this->findManageableQuiz($user, $id, 'You can only import questions into your own quizzes');
+        if (!$quiz) {
+            return;
+        }
+
+        if (!isset($_FILES['file']) || !is_array($_FILES['file'])) {
+            Response::error('No CSV file uploaded', 400);
+            return;
+        }
+
+        $file = $_FILES['file'];
+        $uploadError = (int) ($file['error'] ?? UPLOAD_ERR_NO_FILE);
+        if ($uploadError !== UPLOAD_ERR_OK) {
+            Response::error($this->describeUploadError($uploadError), 400);
+            return;
+        }
+
+        $tmpName = (string) ($file['tmp_name'] ?? '');
+        $originalName = (string) ($file['name'] ?? '');
+        $size = (int) ($file['size'] ?? 0);
+
+        if ($tmpName === '' || !is_uploaded_file($tmpName)) {
+            Response::error('The uploaded file could not be read', 400);
+            return;
+        }
+
+        if (strtolower(pathinfo($originalName, PATHINFO_EXTENSION)) !== 'csv') {
+            Response::error('Please upload a .csv file', 422);
+            return;
+        }
+
+        if ($size <= 0) {
+            Response::error('The uploaded CSV file is empty', 422);
+            return;
+        }
+
+        if ($size > QuestionCsv::MAX_FILE_BYTES) {
+            Response::error('The CSV file is too large (maximum 2 MB)', 422);
+            return;
+        }
+
+        $contents = file_get_contents($tmpName);
+        if (!is_string($contents) || trim($contents) === '') {
+            Response::error('The uploaded CSV file is empty', 422);
+            return;
+        }
+
+        $parsed = QuestionCsv::parse($contents);
+        if (!empty($parsed['error'])) {
+            Response::error((string) $parsed['error'], 422);
+            return;
+        }
+
+        if (empty($parsed['rows'])) {
+            Response::error('The CSV file has a header but no question rows', 422);
+            return;
+        }
+
+        $prepared = [];
+        $results = [];
+        $invalid = 0;
+
+        foreach ($parsed['rows'] as $row) {
+            $rowNumber = (int) $row['row'];
+
+            try {
+                $question = QuestionCsv::buildQuestion($row['data']);
+
+                if ($question['image_question'] !== null) {
+                    $question['image_question'] = $this->normalizeImageQuestionPath($question['image_question']);
+                }
+
+                $prepared[] = ['row' => $rowNumber, 'question' => $question];
+            } catch (Exception $e) {
+                $invalid++;
+                $results[] = [
+                    'row' => $rowNumber,
+                    'status' => 'failed',
+                    'message' => $e->getMessage(),
+                ];
+            }
+        }
+
+        $imported = 0;
+        $skipped = 0;
+        $failed = $invalid;
+
+        if ($prepared !== []) {
+            $summary = $this->repo->importQuestions($id, $prepared);
+            $imported = (int) $summary['imported'];
+            $skipped = (int) $summary['skipped'];
+            $failed += (int) $summary['failed'];
+            $results = array_merge($results, $summary['results']);
+        }
+
+        usort($results, static fn ($a, $b) => ((int) $a['row']) <=> ((int) $b['row']));
+
+        $message = sprintf(
+            'Imported %d question%s. Skipped %d duplicate%s. Failed %d row%s.',
+            $imported,
+            $imported === 1 ? '' : 's',
+            $skipped,
+            $skipped === 1 ? '' : 's',
+            $failed,
+            $failed === 1 ? '' : 's'
+        );
+
+        Response::success([
+            'message' => $message,
+            'imported' => $imported,
+            'skipped' => $skipped,
+            'failed' => $failed,
+            'total_rows' => count($parsed['rows']),
+            'results' => $results,
+        ]);
+    }
+
+    /**
+     * Export a quiz's questions as CSV (teacher/admin)
+     * GET /quizzes/{id}/questions/export
+     */
+    public function exportQuestions(array $user, int $id): void
+    {
+        $quiz = $this->findManageableQuiz($user, $id, 'You can only export questions from your own quizzes');
+        if (!$quiz) {
+            return;
+        }
+
+        $questions = $this->repo->getQuestions($id);
+        $csv = QuestionCsv::serialize($questions);
+
+        $this->streamCsv($csv, 'quiz-' . $id . '-questions-' . date('Y-m-d-His') . '.csv');
+    }
+
+    /**
+     * Download the import template (teacher/admin)
+     * GET /quizzes/{id}/questions/import-template
+     */
+    public function importTemplate(array $user, int $id): void
+    {
+        $quiz = $this->findManageableQuiz($user, $id, 'You can only download templates for your own quizzes');
+        if (!$quiz) {
+            return;
+        }
+
+        $this->streamCsv(QuestionCsv::template(), 'quiz-' . $id . '-questions-import-template.csv');
+    }
+
+    /**
+     * Load a quiz the current user may manage questions for.
+     */
+    private function findManageableQuiz(array $user, int $quizId, string $forbiddenMessage): ?array
+    {
+        $roleMiddleware = new RoleMiddleware($user);
+        if (!$roleMiddleware->requireRole(['admin', 'teacher', 'super_admin'])) {
+            return null;
+        }
+
+        $quiz = $this->repo->findById($quizId);
+
+        if (!$quiz) {
+            Response::error('Quiz not found', 404);
+            return null;
+        }
+
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $quiz['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::error('Quiz not found', 404);
+            return null;
+        }
+
+        if ($roleMiddleware->isTeacher() && !$roleMiddleware->isAdmin()
+            && ($quiz['teacher_id'] ?? 0) != ($user['teacher_id'] ?? 0)) {
+            Response::forbidden($forbiddenMessage);
+            return null;
+        }
+
+        return $quiz;
+    }
+
+    private function describeUploadError(int $code): string
+    {
+        switch ($code) {
+            case UPLOAD_ERR_INI_SIZE:
+            case UPLOAD_ERR_FORM_SIZE:
+                return 'The CSV file is too large';
+            case UPLOAD_ERR_PARTIAL:
+                return 'The CSV file was only partially uploaded';
+            case UPLOAD_ERR_NO_FILE:
+                return 'No CSV file uploaded';
+            case UPLOAD_ERR_NO_TMP_DIR:
+                return 'The server has no temporary folder for uploads';
+            case UPLOAD_ERR_CANT_WRITE:
+                return 'The server could not write the uploaded file';
+            case UPLOAD_ERR_EXTENSION:
+                return 'A server extension stopped the upload';
+            default:
+                return 'The CSV file could not be uploaded';
+        }
+    }
+
+    private function streamCsv(string $csv, string $filename): void
+    {
+        header('Content-Type: text/csv; charset=utf-8');
+        header('Content-Disposition: attachment; filename="' . $filename . '"');
+        header('Cache-Control: no-store, no-cache, must-revalidate');
+        header('Pragma: no-cache');
+
+        // UTF-8 BOM so Excel opens non-ASCII text correctly. QuestionCsv::parse
+        // strips it again on import.
+        echo "\xEF\xBB\xBF" . $csv;
+        exit;
     }
 
     /**

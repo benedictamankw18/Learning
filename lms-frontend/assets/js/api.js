@@ -533,6 +533,15 @@ const QuizAPI = {
     delete: (id) => API.delete(API_ENDPOINTS.QUIZ_BY_ID(id)),
     getQuestions: (id) => API.get(API_ENDPOINTS.QUIZ_QUESTIONS(id)),
     addQuestion: (id, data) => API.post(API_ENDPOINTS.QUIZ_QUESTIONS(id), data),
+    importQuestions: (id, formData) => API.upload(API_ENDPOINTS.QUIZ_QUESTION_IMPORT(id), formData),
+    exportQuestions: (id) => API.download(
+        API_ENDPOINTS.QUIZ_QUESTION_EXPORT(id),
+        `quiz-${id}-questions.csv`
+    ),
+    downloadImportTemplate: (id) => API.download(
+        API_ENDPOINTS.QUIZ_QUESTION_IMPORT_TEMPLATE(id),
+        `quiz-${id}-questions-import-template.csv`
+    ),
     updateQuestion: (id, data) => API.put(API_ENDPOINTS.QUIZ_QUESTION_BY_ID(id), data),
     deleteQuestion: (id) => API.delete(API_ENDPOINTS.QUIZ_QUESTION_BY_ID(id)),
 };

@@ -13,10 +13,12 @@ are the detailed procedures.
 | Deploy to a real server that users will access over the internet | [`production.md`](production.md) |
 | Back up, migrate, monitor, or roll back a running system | [`operations.md`](operations.md) |
 
-Related security documentation:
+Related documentation:
 
 - [`../security/phase7-secret-rotation.md`](../security/phase7-secret-rotation.md) — rotating
   compromised secrets and purging Git history.
+- [`../assessment/question-import-export.md`](../assessment/question-import-export.md) — the
+  CSV question import/export format and workflow.
 - The **Security Notes** section of the root [`README.md`](../../README.md).
 
 ## Components
