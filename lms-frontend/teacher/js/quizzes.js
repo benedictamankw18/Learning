@@ -1258,7 +1258,7 @@
 
         if (action === 'delete') {
             try {
-                await QuizAPI.deleteQuestion(questionId);
+                await QuizAPI.deleteQuestion(questionId, state.selectedQuizId);
                 showNotice('Question deleted successfully.', 'success');
                 resetQuestionForm();
                 await loadQuestions(state.selectedQuizId);
@@ -1335,7 +1335,7 @@
 
         try {
             if (questionId > 0) {
-                await QuizAPI.updateQuestion(questionId, payload);
+                await QuizAPI.updateQuestion(questionId, payload, quizId);
                 showNotice('Question updated successfully.', 'success');
             } else {
                 await QuizAPI.addQuestion(quizId, payload);

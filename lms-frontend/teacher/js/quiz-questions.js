@@ -482,7 +482,7 @@
 
       let response;
       if (questionId) {
-        response = await QuizAPI.updateQuestion(questionId, payload);
+        response = await QuizAPI.updateQuestion(questionId, payload, state.quizId);
       } else {
         response = await QuizAPI.addQuestion(state.quizId, payload);
       }
@@ -506,7 +506,7 @@
 
     try {
       setNotice("");
-      const response = await QuizAPI.deleteQuestion(questionId);
+      const response = await QuizAPI.deleteQuestion(questionId, state.quizId);
       if (!response || !response.success) {
         throw new Error(response && response.message ? response.message : "Delete failed");
       }
@@ -532,7 +532,7 @@
         continue;
       }
 
-      const response = await QuizAPI.updateQuestion(q.id, { order_index: orderIndex });
+      const response = await QuizAPI.updateQuestion(q.id, { order_index: orderIndex }, state.quizId);
       if (!response || !response.success) {
         throw new Error(response && response.message ? response.message : "Failed to reorder questions");
       }

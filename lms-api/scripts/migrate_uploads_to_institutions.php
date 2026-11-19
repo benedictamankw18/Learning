@@ -328,6 +328,18 @@ $referenceQueries = [
                   WHERE qq.image_question IS NOT NULL AND qq.image_question <> ''",
     ],
     [
+        // Phase 1B: new uploads are attached to the bank row, not the legacy
+        // per-quiz question. Institution is stored on the question itself.
+        'label' => 'questions.image_question',
+        'table' => 'questions',
+        'id_column' => 'question_id',
+        'column' => 'image_question',
+        'default_category' => 'quiz-questions',
+        'sql' => "SELECT question_id AS row_id, image_question AS value, institution_id AS institution_id
+                  FROM questions
+                  WHERE image_question IS NOT NULL AND image_question <> ''",
+    ],
+    [
         'label' => 'users.profile_photo',
         'table' => 'users',
         'id_column' => 'user_id',

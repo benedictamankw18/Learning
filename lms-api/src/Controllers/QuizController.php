@@ -1178,35 +1178,54 @@ class QuizController
             return;
         }
 
-        $question = $this->repo->findQuestionById($id);
-        if (!$question) {
-            Response::error('Question not found', 404);
-            return;
-        }
-
-        $quiz = $this->repo->findById((int) $question['quiz_id']);
-        if (!$quiz) {
-            Response::error('Quiz not found', 404);
-            return;
-        }
-
-        if (!AccessControl::isSuperAdmin($user)
-            && (int) $quiz['institution_id'] !== AccessControl::institutionId($user)) {
-            Response::error('Question not found', 404);
-            return;
-        }
-
-        if ($roleMiddleware->isTeacher() && !$roleMiddleware->isAdmin()
-            && ($quiz['teacher_id'] ?? 0) != ($user['teacher_id'] ?? 0)) {
-            Response::forbidden('You can only update questions in your own quizzes');
-            return;
-        }
-
         $data = json_decode(file_get_contents('php://input'), true);
 
         if (!is_array($data)) {
             Response::error('Invalid JSON payload', 400);
             return;
+        }
+
+        $quizId = $this->resolveQuestionQuizId($data);
+        $question = $this->repo->findQuestionById($id, $quizId);
+        if (!$question) {
+            Response::error('Question not found', 404);
+            return;
+        }
+
+        $isSuperAdmin = AccessControl::isSuperAdmin($user);
+        $isAdmin = $roleMiddleware->isAdmin();
+
+        if (!$isSuperAdmin
+            && (int) $question['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::error('Question not found', 404);
+            return;
+        }
+
+        if (!$isSuperAdmin && !$isAdmin) {
+            // Bank content belongs to its creator; other teachers must fork
+            // rather than edit a colleague's question.
+            if ((int) ($question['owner_user_id'] ?? 0) !== (int) ($user['user_id'] ?? 0)) {
+                Response::forbidden('You can only edit questions you created');
+                return;
+            }
+
+            if ($quizId !== null && !empty($question['quiz_id'])) {
+                $quiz = $this->repo->findById((int) $question['quiz_id']);
+                if (!$quiz) {
+                    Response::error('Quiz not found', 404);
+                    return;
+                }
+
+                if ((int) $quiz['institution_id'] !== AccessControl::institutionId($user)) {
+                    Response::error('Question not found', 404);
+                    return;
+                }
+
+                if (($quiz['teacher_id'] ?? 0) != ($user['teacher_id'] ?? 0)) {
+                    Response::forbidden('You can only update questions in your own quizzes');
+                    return;
+                }
+            }
         }
 
         $validator = new Validator($data);
@@ -1251,9 +1270,38 @@ class QuizController
             $data['options'] = $normalizedOptions;
         }
 
-        $this->repo->updateQuestion($id, $data);
+        $this->repo->updateQuestion($id, $data, $quizId);
 
         Response::success(['message' => 'Question updated successfully']);
+    }
+
+    /**
+     * Resolve the quiz a question request is scoped to.
+     *
+     * New clients send `quiz_id` (body or query) so a question reused by
+     * several quizzes is checked against the right one. Older clients omit it
+     * and keep the previous single-quiz behaviour.
+     */
+    private function resolveQuestionQuizId(array $data = []): ?int
+    {
+        $candidates = [
+            $data['quiz_id'] ?? null,
+            $_GET['quiz_id'] ?? null,
+            $_GET['quizId'] ?? null,
+        ];
+
+        foreach ($candidates as $candidate) {
+            if ($candidate === null || $candidate === '' || !is_numeric($candidate)) {
+                continue;
+            }
+
+            $quizId = (int) $candidate;
+            if ($quizId > 0) {
+                return $quizId;
+            }
+        }
+
+        return null;
     }
 
     private function normalizeImageQuestionPath($value): ?string
@@ -1301,32 +1349,51 @@ class QuizController
             return;
         }
 
-        $question = $this->repo->findQuestionById($id);
+        $quizId = $this->resolveQuestionQuizId();
+        $question = $this->repo->findQuestionById($id, $quizId);
         if (!$question) {
             Response::error('Question not found', 404);
             return;
         }
 
-        $quiz = $this->repo->findById((int) $question['quiz_id']);
-        if (!$quiz) {
-            Response::error('Quiz not found', 404);
-            return;
-        }
+        $isSuperAdmin = AccessControl::isSuperAdmin($user);
+        $isAdmin = $roleMiddleware->isAdmin();
 
-        if (!AccessControl::isSuperAdmin($user)
-            && (int) $quiz['institution_id'] !== AccessControl::institutionId($user)) {
+        if (!$isSuperAdmin
+            && (int) $question['institution_id'] !== AccessControl::institutionId($user)) {
             Response::error('Question not found', 404);
             return;
         }
 
-        if ($roleMiddleware->isTeacher() && !$roleMiddleware->isAdmin()
-            && ($quiz['teacher_id'] ?? 0) != ($user['teacher_id'] ?? 0)) {
-            Response::forbidden('You can only delete questions in your own quizzes');
-            return;
+        $isCreator = (int) ($question['owner_user_id'] ?? 0) === (int) ($user['user_id'] ?? 0);
+
+        if (!$isSuperAdmin && !$isAdmin && !$isCreator) {
+            // A teacher who did not create the question may still take it out
+            // of a quiz they manage, but may not unlink it everywhere.
+            $canManageQuiz = false;
+
+            if (!empty($question['quiz_id'])) {
+                $quiz = $this->repo->findById((int) $question['quiz_id']);
+                $canManageQuiz = $quiz
+                    && (int) $quiz['institution_id'] === AccessControl::institutionId($user)
+                    && ($quiz['teacher_id'] ?? 0) == ($user['teacher_id'] ?? 0);
+            }
+
+            if (!$canManageQuiz) {
+                Response::forbidden('You can only remove questions from your own quizzes');
+                return;
+            }
         }
 
-        $this->repo->deleteQuestion($id);
-        Response::success(['message' => 'Question deleted successfully']);
+        if (!empty($question['quiz_id']) && $quizId === null && !$isSuperAdmin && !$isAdmin && !$isCreator) {
+            // Scope the legacy endpoint to the quiz the teacher manages
+            // instead of unlinking a shared question from every quiz.
+            $quizId = (int) $question['quiz_id'];
+        }
+
+        $this->repo->deleteQuestion($id, $quizId);
+
+        Response::success(['message' => 'Question removed from quiz']);
     }
 
     /**

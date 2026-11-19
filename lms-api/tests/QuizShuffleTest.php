@@ -21,10 +21,15 @@ function quizShuffleFixture(): array
         skip('quiz_submission_questions table has not been migrated');
     }
 
+    if (!testTableExists($pdo, 'questions') || !testTableExists($pdo, 'quiz_question_links')) {
+        skip('the central question bank has not been migrated');
+    }
+
     $quiz = $pdo->query("
-        SELECT q.quiz_id, COUNT(qq.question_id) AS question_count
+        SELECT q.quiz_id, COUNT(l.question_id) AS question_count
         FROM quizzes q
-        INNER JOIN quiz_questions qq ON qq.quiz_id = q.quiz_id
+        INNER JOIN quiz_question_links l ON l.quiz_id = q.quiz_id
+        INNER JOIN questions qn ON qn.question_id = l.question_id
         GROUP BY q.quiz_id
         HAVING question_count >= 3
         ORDER BY question_count DESC, q.quiz_id ASC
@@ -39,9 +44,9 @@ function quizShuffleFixture(): array
 
     $stmt = $pdo->prepare("
         SELECT question_id
-        FROM quiz_questions
+        FROM quiz_question_links
         WHERE quiz_id = :quiz_id
-        ORDER BY order_index ASC, created_at ASC, question_id ASC
+        ORDER BY position ASC, question_id ASC
     ");
     $stmt->execute(['quiz_id' => $quizId]);
     $authored = array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN));

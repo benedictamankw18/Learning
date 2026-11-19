@@ -24,14 +24,15 @@ class QuizRepository
                 q.*,
                 cs.section_name,
                 (
-                    SELECT COALESCE(SUM(qq.points), 0)
-                    FROM quiz_questions qq
-                    WHERE qq.quiz_id = q.quiz_id
+                    SELECT COALESCE(SUM(COALESCE(l.points_override, qn.points)), 0)
+                    FROM quiz_question_links l
+                    INNER JOIN questions qn ON qn.question_id = l.question_id
+                    WHERE l.quiz_id = q.quiz_id
                 ) AS total_points,
                 (
                     SELECT COUNT(*)
-                    FROM quiz_questions qq
-                    WHERE qq.quiz_id = q.quiz_id
+                    FROM quiz_question_links l
+                    WHERE l.quiz_id = q.quiz_id
                 ) AS question_count
             FROM quizzes q
             LEFT JOIN course_sections cs ON q.section_id = cs.course_sections_id
@@ -55,14 +56,15 @@ class QuizRepository
                 c.teacher_id,
                 cs.section_name,
                 (
-                    SELECT COALESCE(SUM(qq.points), 0)
-                    FROM quiz_questions qq
-                    WHERE qq.quiz_id = q.quiz_id
+                    SELECT COALESCE(SUM(COALESCE(l.points_override, qn.points)), 0)
+                    FROM quiz_question_links l
+                    INNER JOIN questions qn ON qn.question_id = l.question_id
+                    WHERE l.quiz_id = q.quiz_id
                 ) AS total_points,
                 (
                     SELECT COUNT(*)
-                    FROM quiz_questions qq
-                    WHERE qq.quiz_id = q.quiz_id
+                    FROM quiz_question_links l
+                    WHERE l.quiz_id = q.quiz_id
                 ) AS question_count
             FROM quizzes q
             INNER JOIN class_subjects c ON q.course_id = c.course_id
@@ -182,11 +184,31 @@ class QuizRepository
      */
     public function delete(int $id): bool
     {
-        $stmt = $this->db->prepare("
-            DELETE FROM quizzes WHERE quiz_id = :id
-        ");
+        $ownsTransaction = !$this->db->inTransaction();
+        if ($ownsTransaction) {
+            $this->db->beginTransaction();
+        }
 
-        return $stmt->execute(['id' => $id]);
+        try {
+            // Links belong to the quiz, so they go with it. The bank rows
+            // themselves are kept: they may still be used by another quiz.
+            $this->db->prepare('DELETE FROM quiz_question_links WHERE quiz_id = :id')
+                ->execute(['id' => $id]);
+
+            $deleted = $this->db->prepare('DELETE FROM quizzes WHERE quiz_id = :id')
+                ->execute(['id' => $id]);
+
+            if ($ownsTransaction) {
+                $this->db->commit();
+            }
+
+            return $deleted;
+        } catch (\Throwable $e) {
+            if ($ownsTransaction && $this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            throw $e;
+        }
     }
 
     /**
@@ -195,10 +217,22 @@ class QuizRepository
     public function getQuestions(int $quizId): array
     {
         $stmt = $this->db->prepare("
-            SELECT *
-            FROM quiz_questions
-            WHERE quiz_id = :quiz_id
-            ORDER BY order_index ASC, created_at ASC
+            SELECT
+                qn.question_id,
+                qn.question_text,
+                qn.image_question,
+                qn.question_type,
+                COALESCE(l.points_override, qn.points) AS points,
+                qn.difficulty,
+                qn.explanation,
+                qn.correct_answer,
+                l.position AS order_index,
+                qn.created_at,
+                qn.updated_at
+            FROM quiz_question_links l
+            INNER JOIN questions qn ON qn.question_id = l.question_id
+            WHERE l.quiz_id = :quiz_id
+            ORDER BY l.position ASC, qn.question_id ASC
         ");
 
         $stmt->execute(['quiz_id' => $quizId]);
@@ -211,13 +245,14 @@ class QuizRepository
         foreach ($questions as &$question) {
             $optStmt = $this->db->prepare("
                 SELECT option_label, option_text, is_correct
-                FROM quiz_question_options
+                FROM question_bank_options
                 WHERE question_id = :question_id
                 ORDER BY option_label ASC
             ");
             $optStmt->execute(['question_id' => (int) $question['question_id']]);
             $question['options'] = $optStmt->fetchAll(PDO::FETCH_ASSOC);
         }
+        unset($question);
 
         return $questions;
     }
@@ -257,19 +292,17 @@ class QuizRepository
             return $existing;
         }
 
-        $stmt = $this->db->prepare("
-            SELECT question_id
-            FROM quiz_questions
-            WHERE quiz_id = :quiz_id
-            ORDER BY order_index ASC, created_at ASC, question_id ASC
-        ");
-
-        $stmt->execute(['quiz_id' => $quizId]);
-        $questionIds = array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN));
-
-        if (empty($questionIds)) {
+        $questions = $this->getQuestions($quizId);
+        if (empty($questions)) {
             return [];
         }
+
+        $questionsById = [];
+        foreach ($questions as $question) {
+            $questionsById[(int) $question['question_id']] = $question;
+        }
+
+        $questionIds = array_keys($questionsById);
 
         if ($shuffle) {
             $questionIds = $this->shuffleQuestionOrder($questionIds);
@@ -279,11 +312,13 @@ class QuizRepository
             INSERT IGNORE INTO quiz_submission_questions (
                 submission_id,
                 question_id,
-                position
+                position,
+                question_snapshot
             ) VALUES (
                 :submission_id,
                 :question_id,
-                :position
+                :position,
+                :question_snapshot
             )
         ");
 
@@ -292,6 +327,7 @@ class QuizRepository
                 'submission_id' => $submissionId,
                 'question_id' => $questionId,
                 'position' => $position,
+                'question_snapshot' => $this->buildQuestionSnapshot($questionsById[$questionId]),
             ]);
         }
 
@@ -325,6 +361,11 @@ class QuizRepository
 
     /**
      * Get the questions for an attempt in the student's persisted order.
+     *
+     * The stored snapshot wins so an attempt keeps the wording, answer key
+     * and points it was served with even if the bank row is edited later.
+     * Questions without a snapshot (attempts started before phase 1B) fall
+     * back to the current bank content.
      */
     public function getSubmissionQuestions(int $submissionId, int $quizId, bool $shuffle): array
     {
@@ -333,15 +374,28 @@ class QuizRepository
             return [];
         }
 
-        $questionsById = [];
+        $bankQuestions = [];
         foreach ($this->getQuestions($quizId) as $question) {
-            $questionsById[(int) $question['question_id']] = $question;
+            $bankQuestions[(int) $question['question_id']] = $question;
         }
 
+        $snapshots = $this->getSubmissionQuestionSnapshots($submissionId);
+
         $ordered = [];
-        foreach ($questionIds as $questionId) {
-            if (isset($questionsById[$questionId])) {
-                $ordered[] = $questionsById[$questionId];
+        foreach ($questionIds as $position => $questionId) {
+            $questionId = (int) $questionId;
+
+            if (isset($snapshots[$questionId])) {
+                $snapshot = $snapshots[$questionId];
+                $snapshot['order_index'] = $position;
+                $ordered[] = $snapshot;
+                continue;
+            }
+
+            if (isset($bankQuestions[$questionId])) {
+                $question = $bankQuestions[$questionId];
+                $question['order_index'] = $position;
+                $ordered[] = $question;
             }
         }
 
@@ -349,13 +403,105 @@ class QuizRepository
     }
 
     /**
-     * Get question with options
+     * Decode the per-attempt snapshots for a submission.
+     *
+     * @return array<int,array<string,mixed>>
+     */
+    private function getSubmissionQuestionSnapshots(int $submissionId): array
+    {
+        $stmt = $this->db->prepare("
+            SELECT question_id, question_snapshot
+            FROM quiz_submission_questions
+            WHERE submission_id = :submission_id
+              AND question_snapshot IS NOT NULL
+        ");
+
+        $stmt->execute(['submission_id' => $submissionId]);
+
+        $snapshots = [];
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $decoded = $this->decodeQuestionSnapshot($row['question_snapshot'] ?? null);
+            if ($decoded !== null) {
+                $snapshots[(int) $row['question_id']] = $decoded;
+            }
+        }
+
+        return $snapshots;
+    }
+
+    /**
+     * Serialize the question content an attempt was served with.
+     */
+    private function buildQuestionSnapshot(array $question): string
+    {
+        $options = [];
+        foreach (($question['options'] ?? []) as $option) {
+            if (!is_array($option)) {
+                continue;
+            }
+
+            $options[] = [
+                'label' => (string) ($option['option_label'] ?? ($option['label'] ?? '')),
+                'text' => (string) ($option['option_text'] ?? ($option['text'] ?? '')),
+                'is_correct' => (int) ($option['is_correct'] ?? 0),
+            ];
+        }
+
+        return (string) json_encode([
+            'question_id' => (int) ($question['question_id'] ?? 0),
+            'question_text' => (string) ($question['question_text'] ?? ''),
+            'image_question' => $question['image_question'] ?? null,
+            'question_type' => (string) ($question['question_type'] ?? 'multiple_choice'),
+            'points' => (int) ($question['points'] ?? 1),
+            'difficulty' => $question['difficulty'] ?? null,
+            'explanation' => $question['explanation'] ?? null,
+            'correct_answer' => $question['correct_answer'] ?? null,
+            'options' => $options,
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    }
+
+    /**
+     * @return array<string,mixed>|null
+     */
+    private function decodeQuestionSnapshot(?string $raw): ?array
+    {
+        if (!is_string($raw) || trim($raw) === '') {
+            return null;
+        }
+
+        $decoded = json_decode($raw, true);
+        if (!is_array($decoded)) {
+            return null;
+        }
+
+        // Normalize snapshot options to the shape getQuestions() returns so
+        // callers do not have to care where a question came from.
+        $options = [];
+        foreach (($decoded['options'] ?? []) as $option) {
+            if (!is_array($option)) {
+                continue;
+            }
+
+            $options[] = [
+                'option_label' => (string) ($option['label'] ?? ($option['option_label'] ?? '')),
+                'option_text' => (string) ($option['text'] ?? ($option['option_text'] ?? '')),
+                'is_correct' => (int) ($option['is_correct'] ?? 0),
+            ];
+        }
+
+        $decoded['options'] = $options;
+
+        return $decoded;
+    }
+
+    /**
+     * Get a bank question with its options.
      */
     public function getQuestionWithOptions(int $questionId): ?array
     {
         $stmt = $this->db->prepare("
             SELECT *
-            FROM quiz_questions
+            FROM questions
             WHERE question_id = :id
         ");
 
@@ -366,10 +512,9 @@ class QuizRepository
             return null;
         }
 
-        // Get options
         $stmt = $this->db->prepare("
             SELECT *
-            FROM quiz_question_options
+            FROM question_bank_options
             WHERE question_id = :question_id
             ORDER BY option_label ASC
         ");
@@ -381,83 +526,251 @@ class QuizRepository
     }
 
     /**
-     * Find question by ID
+     * Find a bank question by ID.
+     *
+     * The returned row carries the `quiz_id` used to authorize the request.
+     * When the caller knows which quiz it is acting on it should pass it so a
+     * question reused by several quizzes is checked against the right one.
      */
-    public function findQuestionById(int $questionId): ?array
+    public function findQuestionById(int $questionId, ?int $quizId = null): ?array
     {
         $stmt = $this->db->prepare("
             SELECT *
-            FROM quiz_questions
+            FROM questions
             WHERE question_id = :id
         ");
 
         $stmt->execute(['id' => $questionId]);
-        $result = $stmt->fetch(PDO::FETCH_ASSOC);
-        return $result ?: null;
+        $question = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$question) {
+            return null;
+        }
+
+        if ($quizId !== null) {
+            // A caller that names a quiz must only see the question through
+            // that quiz. Returning the bank row when it is not linked would
+            // let a request scoped to the wrong quiz succeed.
+            $linkedQuizId = $this->findLinkedQuizId($questionId, $quizId);
+            if ($linkedQuizId === null) {
+                return null;
+            }
+            $question['quiz_id'] = $linkedQuizId;
+
+            return $question;
+        }
+
+        $question['quiz_id'] = $this->findLinkedQuizId($questionId);
+
+        return $question;
     }
 
     /**
-     * Add question to quiz
+     * Resolve the quiz a question is being managed through.
+     *
+     * Returns null when the requested quiz does not link the question, which
+     * lets callers treat a cross-quiz request as "not found" instead of
+     * leaking that the bank row exists.
+     */
+    private function findLinkedQuizId(int $questionId, ?int $preferredQuizId = null): ?int
+    {
+        if ($preferredQuizId !== null) {
+            $stmt = $this->db->prepare("
+                SELECT quiz_id
+                FROM quiz_question_links
+                WHERE question_id = :question_id AND quiz_id = :quiz_id
+                LIMIT 1
+            ");
+            $stmt->execute(['question_id' => $questionId, 'quiz_id' => $preferredQuizId]);
+            $found = $stmt->fetchColumn();
+
+            return $found === false ? null : (int) $found;
+        }
+
+        $stmt = $this->db->prepare("
+            SELECT quiz_id
+            FROM quiz_question_links
+            WHERE question_id = :question_id
+            ORDER BY quiz_id ASC
+            LIMIT 1
+        ");
+        $stmt->execute(['question_id' => $questionId]);
+        $found = $stmt->fetchColumn();
+
+        return $found === false ? null : (int) $found;
+    }
+
+    /**
+     * Add a question to the bank and link it to a quiz.
+     *
+     * The bank row is created once; the link carries the quiz-specific order.
+     * `owner_user_id` follows the quiz's teacher, so a question authored for a
+     * course with no teacher is institution-owned.
      */
     public function addQuestion(array $data): int
     {
-        $imageQuestion = $data['image_question'] ?? ($data['image_name'] ?? null);
-
-        $stmt = $this->db->prepare("
-            INSERT INTO quiz_questions (
-                quiz_id,
-                question_text,
-                image_question,
-                question_type,
-                points,
-                difficulty,
-                explanation,
-                correct_answer,
-                order_index
-            ) VALUES (
-                :quiz_id,
-                :question_text,
-                :image_question,
-                :question_type,
-                :points,
-                :difficulty,
-                :explanation,
-                :correct_answer,
-                :order_index
-            )
-        ");
-
-        $stmt->execute([
-            'quiz_id' => $data['quiz_id'],
-            'question_text' => $data['question_text'],
-            'image_question' => $imageQuestion,
-            'question_type' => $data['question_type'],
-            'points' => $data['points'] ?? 1,
-            'difficulty' => $data['difficulty'] ?? 'medium',
-            'explanation' => $data['explanation'] ?? null,
-            'correct_answer' => $data['correct_answer'] ?? null,
-            'order_index' => $data['order_index'] ?? 0
-        ]);
-
-        $questionId = (int) $this->db->lastInsertId();
-
-        // Add options if provided
-        if (!empty($data['options']) && is_array($data['options'])) {
-            foreach ($data['options'] as $option) {
-                $this->addQuestionOption($questionId, $option);
-            }
+        $quizId = (int) ($data['quiz_id'] ?? 0);
+        if ($quizId <= 0) {
+            throw new \InvalidArgumentException('quiz_id is required');
         }
 
-        return $questionId;
+        $context = $this->getQuizQuestionContext($quizId);
+        if ($context === null) {
+            throw new \RuntimeException('Quiz not found');
+        }
+
+        $ownsTransaction = !$this->db->inTransaction();
+        if ($ownsTransaction) {
+            $this->db->beginTransaction();
+        }
+
+        try {
+            $imageQuestion = $data['image_question'] ?? ($data['image_name'] ?? null);
+            $points = (int) ($data['points'] ?? 1);
+
+            $stmt = $this->db->prepare("
+                INSERT INTO questions (
+                    institution_id,
+                    owner_user_id,
+                    question_text,
+                    image_question,
+                    question_type,
+                    points,
+                    difficulty,
+                    explanation,
+                    correct_answer
+                ) VALUES (
+                    :institution_id,
+                    :owner_user_id,
+                    :question_text,
+                    :image_question,
+                    :question_type,
+                    :points,
+                    :difficulty,
+                    :explanation,
+                    :correct_answer
+                )
+            ");
+
+            $stmt->execute([
+                'institution_id' => $context['institution_id'],
+                'owner_user_id' => $context['owner_user_id'],
+                'question_text' => $data['question_text'],
+                'image_question' => $imageQuestion,
+                'question_type' => $data['question_type'],
+                'points' => $points,
+                'difficulty' => $data['difficulty'] ?? 'medium',
+                'explanation' => $data['explanation'] ?? null,
+                'correct_answer' => $data['correct_answer'] ?? null,
+            ]);
+
+            $questionId = (int) $this->db->lastInsertId();
+
+            if (!empty($data['options']) && is_array($data['options'])) {
+                foreach ($data['options'] as $option) {
+                    $this->addQuestionOption($questionId, $option);
+                }
+            }
+
+            $position = array_key_exists('order_index', $data)
+                ? (int) $data['order_index']
+                : $this->nextQuestionPosition($quizId);
+
+            $this->linkQuestionToQuiz(
+                $quizId,
+                $questionId,
+                $position,
+                array_key_exists('points_override', $data) ? (int) $data['points_override'] : null
+            );
+
+            if ($ownsTransaction) {
+                $this->db->commit();
+            }
+
+            return $questionId;
+        } catch (\Throwable $e) {
+            if ($ownsTransaction && $this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            throw $e;
+        }
     }
 
     /**
-     * Add option to question
+     * Resolve the institution and question owner for a quiz.
+     *
+     * @return array{institution_id:int,owner_user_id:?int}|null
+     */
+    private function getQuizQuestionContext(int $quizId): ?array
+    {
+        $stmt = $this->db->prepare("
+            SELECT
+                cs.institution_id,
+                t.user_id AS owner_user_id
+            FROM quizzes q
+            INNER JOIN class_subjects cs ON cs.course_id = q.course_id
+            LEFT JOIN teachers t ON t.teacher_id = cs.teacher_id
+            WHERE q.quiz_id = :quiz_id
+        ");
+
+        $stmt->execute(['quiz_id' => $quizId]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$row) {
+            return null;
+        }
+
+        return [
+            'institution_id' => (int) $row['institution_id'],
+            'owner_user_id' => $row['owner_user_id'] !== null ? (int) $row['owner_user_id'] : null,
+        ];
+    }
+
+    private function nextQuestionPosition(int $quizId): int
+    {
+        $stmt = $this->db->prepare("
+            SELECT COALESCE(MAX(position), -1) + 1
+            FROM quiz_question_links
+            WHERE quiz_id = :quiz_id
+        ");
+        $stmt->execute(['quiz_id' => $quizId]);
+
+        return (int) $stmt->fetchColumn();
+    }
+
+    private function linkQuestionToQuiz(int $quizId, int $questionId, int $position, ?int $pointsOverride = null): void
+    {
+        $stmt = $this->db->prepare("
+            INSERT INTO quiz_question_links (
+                quiz_id,
+                question_id,
+                position,
+                points_override
+            ) VALUES (
+                :quiz_id,
+                :question_id,
+                :position,
+                :points_override
+            ) ON DUPLICATE KEY UPDATE
+                position = VALUES(position),
+                points_override = COALESCE(VALUES(points_override), points_override)
+        ");
+
+        $stmt->execute([
+            'quiz_id' => $quizId,
+            'question_id' => $questionId,
+            'position' => $position,
+            'points_override' => $pointsOverride,
+        ]);
+    }
+
+    /**
+     * Add option to a bank question.
      */
     public function addQuestionOption(int $questionId, array $data): int
     {
         $stmt = $this->db->prepare("
-            INSERT INTO quiz_question_options (
+            INSERT INTO question_bank_options (
                 question_id,
                 option_label,
                 option_text,
@@ -481,12 +794,12 @@ class QuizRepository
     }
 
     /**
-     * Replace all options for a question
+     * Replace all options for a bank question.
      */
     public function replaceQuestionOptions(int $questionId, array $options): void
     {
         $deleteStmt = $this->db->prepare("
-            DELETE FROM quiz_question_options
+            DELETE FROM question_bank_options
             WHERE question_id = :question_id
         ");
         $deleteStmt->execute(['question_id' => $questionId]);
@@ -500,14 +813,21 @@ class QuizRepository
      * Append pre-validated questions to a quiz.
      *
      * Duplicate question text is skipped so re-importing the same file is
-     * idempotent. Each insert runs inside a savepoint, so one bad row cannot
-     * discard the rows that already succeeded.
+     * idempotent. A matching row that already exists in the teacher's bank is
+     * linked instead of duplicated, and only genuinely new text creates a bank
+     * row. Each insert runs inside a savepoint, so one bad row cannot discard
+     * the rows that already succeeded.
      *
      * @param array<int,array{row:int,question:array<string,mixed>}> $rows
      * @return array{imported:int,skipped:int,failed:int,results:array<int,array<string,mixed>>}
      */
     public function importQuestions(int $quizId, array $rows): array
     {
+        $context = $this->getQuizQuestionContext($quizId);
+        if ($context === null) {
+            throw new \RuntimeException('Quiz not found');
+        }
+
         $ownsTransaction = !$this->db->inTransaction();
         if ($ownsTransaction) {
             $this->db->beginTransaction();
@@ -519,18 +839,13 @@ class QuizRepository
         $results = [];
 
         try {
-            $stmt = $this->db->prepare("
-                SELECT COALESCE(MAX(order_index), -1)
-                FROM quiz_questions
-                WHERE quiz_id = :quiz_id
-            ");
-            $stmt->execute(['quiz_id' => $quizId]);
-            $nextOrder = (int) $stmt->fetchColumn() + 1;
+            $nextOrder = $this->nextQuestionPosition($quizId);
 
             $stmt = $this->db->prepare("
-                SELECT question_text
-                FROM quiz_questions
-                WHERE quiz_id = :quiz_id
+                SELECT qn.question_text
+                FROM quiz_question_links l
+                INNER JOIN questions qn ON qn.question_id = l.question_id
+                WHERE l.quiz_id = :quiz_id
             ");
             $stmt->execute(['quiz_id' => $quizId]);
 
@@ -538,6 +853,8 @@ class QuizRepository
             foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) as $text) {
                 $existing[$this->normalizeQuestionTextKey((string) $text)] = true;
             }
+
+            $findExisting = $this->prepareBankTextLookup($context);
 
             foreach ($rows as $index => $row) {
                 $rowNumber = (int) ($row['row'] ?? 0);
@@ -569,9 +886,28 @@ class QuizRepository
                 $this->db->exec('SAVEPOINT ' . $savepoint);
 
                 try {
-                    $question['quiz_id'] = $quizId;
-                    $question['order_index'] = $nextOrder;
-                    $this->addQuestion($question);
+                    $params = [
+                        'institution_id' => $context['institution_id'],
+                        'question_text' => trim($text),
+                    ];
+                    if ($context['owner_user_id'] !== null) {
+                        $params['owner_user_id'] = $context['owner_user_id'];
+                    }
+                    $findExisting->execute($params);
+                    $bankQuestionId = $findExisting->fetchColumn();
+
+                    if ($bankQuestionId !== false) {
+                        // Reuse the existing bank row: the question text is
+                        // already maintained by this teacher (or the
+                        // institution), so importing it only adds a link.
+                        $this->linkQuestionToQuiz($quizId, (int) $bankQuestionId, $nextOrder);
+                        $message = 'Question imported from the existing bank.';
+                    } else {
+                        $question['quiz_id'] = $quizId;
+                        $question['order_index'] = $nextOrder;
+                        $this->addQuestion($question);
+                        $message = 'Question imported.';
+                    }
 
                     $existing[$key] = true;
                     $nextOrder++;
@@ -579,7 +915,7 @@ class QuizRepository
                     $results[] = [
                         'row' => $rowNumber,
                         'status' => 'imported',
-                        'message' => 'Question imported.',
+                        'message' => $message,
                     ];
 
                     $this->db->exec('RELEASE SAVEPOINT ' . $savepoint);
@@ -614,66 +950,154 @@ class QuizRepository
         ];
     }
 
+    /**
+     * Lookup used by CSV import to find a bank row the importer may reuse.
+     *
+     * Only institution-owned questions and the quiz teacher's own questions
+     * are visible, matching the per-teacher bank rule.
+     */
+    private function prepareBankTextLookup(array $context): \PDOStatement
+    {
+        $visibility = $context['owner_user_id'] !== null
+            ? '(owner_user_id IS NULL OR owner_user_id = :owner_user_id)'
+            : 'owner_user_id IS NULL';
+
+        $sql = "
+            SELECT question_id
+            FROM questions
+            WHERE institution_id = :institution_id
+              AND is_archived = 0
+              AND TRIM(question_text) = :question_text
+              AND {$visibility}
+            ORDER BY CASE WHEN owner_user_id IS NULL THEN 1 ELSE 0 END, question_id ASC
+            LIMIT 1
+        ";
+
+        return $this->db->prepare($sql);
+    }
+
     private function normalizeQuestionTextKey(string $text): string
     {
         return mb_strtolower(trim($text));
     }
 
     /**
-     * Update question by ID
+     * Update a bank question.
+     *
+     * Bank content is shared, so edits here are visible everywhere the
+     * question is used. Quiz-scoped fields are different: when `$quizId` is
+     * given, `order_index` moves this quiz's link and `points` becomes the
+     * per-quiz override instead of changing the bank default.
      */
-    public function updateQuestion(int $questionId, array $data): bool
+    public function updateQuestion(int $questionId, array $data, ?int $quizId = null): bool
     {
         if (array_key_exists('image_name', $data) && !array_key_exists('image_question', $data)) {
             $data['image_question'] = $data['image_name'];
         }
 
-        $fields = [];
-        $params = ['question_id' => $questionId];
+        $ownsTransaction = !$this->db->inTransaction();
+        if ($ownsTransaction) {
+            $this->db->beginTransaction();
+        }
 
-        $allowedFields = [
-            'question_text',
-            'image_question',
-            'question_type',
-            'points',
-            'difficulty',
-            'explanation',
-            'correct_answer',
-            'order_index'
-        ];
+        try {
+            $fields = [];
+            $params = ['question_id' => $questionId];
 
-        foreach ($allowedFields as $field) {
-            if (array_key_exists($field, $data)) {
-                $fields[] = "$field = :$field";
-                $params[$field] = $data[$field];
+            $allowedFields = [
+                'question_text',
+                'image_question',
+                'question_type',
+                'difficulty',
+                'explanation',
+                'correct_answer',
+            ];
+
+            // A points change made from a quiz applies to that quiz only.
+            if (!($quizId !== null && array_key_exists('points', $data))) {
+                $allowedFields[] = 'points';
             }
-        }
 
-        if (!empty($fields)) {
-            $fields[] = 'updated_at = NOW()';
-            $sql = "UPDATE quiz_questions SET " . implode(', ', $fields) . " WHERE question_id = :question_id";
-            $stmt = $this->db->prepare($sql);
-            $stmt->execute($params);
-        }
+            foreach ($allowedFields as $field) {
+                if (array_key_exists($field, $data)) {
+                    $fields[] = "$field = :$field";
+                    $params[$field] = $data[$field];
+                }
+            }
 
-        if (array_key_exists('options', $data) && is_array($data['options'])) {
-            $this->replaceQuestionOptions($questionId, $data['options']);
-        }
+            if (!empty($fields)) {
+                $fields[] = 'updated_at = NOW()';
+                $sql = "UPDATE questions SET " . implode(', ', $fields) . " WHERE question_id = :question_id";
+                $stmt = $this->db->prepare($sql);
+                $stmt->execute($params);
+            }
 
-        return true;
+            if (array_key_exists('options', $data) && is_array($data['options'])) {
+                $this->replaceQuestionOptions($questionId, $data['options']);
+            }
+
+            if ($quizId !== null) {
+                $linkFields = [];
+                $linkParams = ['quiz_id' => $quizId, 'question_id' => $questionId];
+
+                if (array_key_exists('order_index', $data)) {
+                    $linkFields[] = 'position = :position';
+                    $linkParams['position'] = (int) $data['order_index'];
+                }
+
+                if (array_key_exists('points', $data)) {
+                    $linkFields[] = 'points_override = :points_override';
+                    $linkParams['points_override'] = (int) $data['points'];
+                }
+
+                if (!empty($linkFields)) {
+                    $sql = "UPDATE quiz_question_links SET " . implode(', ', $linkFields)
+                        . " WHERE quiz_id = :quiz_id AND question_id = :question_id";
+                    $this->db->prepare($sql)->execute($linkParams);
+                }
+            }
+
+            if ($ownsTransaction) {
+                $this->db->commit();
+            }
+
+            return true;
+        } catch (\Throwable $e) {
+            if ($ownsTransaction && $this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            throw $e;
+        }
     }
 
     /**
-     * Delete question by ID
+     * Remove a question from a quiz without deleting bank content.
+     *
+     * Without `$quizId` every link is removed, which matches the legacy
+     * "delete question" endpoint. The bank row itself is always kept: it may
+     * be reused by another quiz and past attempts keep their snapshot.
      */
-    public function deleteQuestion(int $questionId): bool
+    public function deleteQuestion(int $questionId, ?int $quizId = null): bool
     {
+        if ($quizId !== null) {
+            $stmt = $this->db->prepare("
+                DELETE FROM quiz_question_links
+                WHERE quiz_id = :quiz_id AND question_id = :question_id
+            ");
+
+            $stmt->execute(['quiz_id' => $quizId, 'question_id' => $questionId]);
+
+            return $stmt->rowCount() > 0;
+        }
+
         $stmt = $this->db->prepare("
-            DELETE FROM quiz_questions
+            DELETE FROM quiz_question_links
             WHERE question_id = :question_id
         ");
 
-        return $stmt->execute(['question_id' => $questionId]);
+        $stmt->execute(['question_id' => $questionId]);
+
+        return $stmt->rowCount() > 0;
     }
 
     /**
@@ -748,18 +1172,44 @@ class QuizRepository
             $questionId = $answer['question_id'];
             $studentAnswer = $answer['answer'];
 
-            // Get question details
+            // Get the bank question and this quiz's points override.
             $stmt = $this->db->prepare("
-                SELECT * FROM quiz_questions WHERE question_id = :id
+                SELECT qn.*, COALESCE(l.points_override, qn.points) AS points
+                FROM quiz_question_links l
+                INNER JOIN questions qn ON qn.question_id = l.question_id
+                WHERE l.quiz_id = :quiz_id AND l.question_id = :question_id
             ");
-            $stmt->execute(['id' => $questionId]);
+            $stmt->execute([
+                'quiz_id' => $quiz['quiz_id'],
+                'question_id' => $questionId,
+            ]);
             $question = $stmt->fetch(PDO::FETCH_ASSOC);
 
             if (!$question) {
                 continue;
             }
 
-            $maxScore += $question['points'];
+            // Grade against what the attempt was served, not against a bank
+            // edit that happened while the student was answering.
+            $snapshotStmt = $this->db->prepare("
+                SELECT question_snapshot
+                FROM quiz_submission_questions
+                WHERE submission_id = :submission_id AND question_id = :question_id
+                LIMIT 1
+            ");
+            $snapshotStmt->execute([
+                'submission_id' => $submissionId,
+                'question_id' => $questionId,
+            ]);
+            $snapshot = $this->decodeQuestionSnapshot($snapshotStmt->fetchColumn() ?: null);
+
+            if ($snapshot !== null) {
+                $question['correct_answer'] = $snapshot['correct_answer'] ?? null;
+                $question['question_type'] = $snapshot['question_type'] ?? $question['question_type'];
+                $question['points'] = $snapshot['points'] ?? $question['points'];
+            }
+
+            $maxScore += (int) $question['points'];
             $normalizedStudentAnswer = $this->normalizeAnswerForComparison((string) $studentAnswer, (string) ($question['question_type'] ?? ''));
             $normalizedCorrectAnswer = $this->normalizeAnswerForComparison((string) ($question['correct_answer'] ?? ''), (string) ($question['question_type'] ?? ''));
             $isCorrect = strcasecmp($normalizedStudentAnswer, $normalizedCorrectAnswer) === 0;
@@ -863,14 +1313,62 @@ class QuizRepository
     }
 
     /**
-     * Get submission answers joined with question metadata for review UI
+     * Get submission answers joined with question metadata for review UI.
+     *
+     * The attempt snapshot takes priority so a review still shows the wording
+     * and answer key the student was actually served after a bank edit.
      */
     public function getSubmissionAnswerDetails(int $submissionId): array
     {
-        $stmt = $this->db->prepare("\n            SELECT\n                q.question_id,\n                q.question_text,\n                q.correct_answer,\n                q.explanation,\n                q.order_index,\n                q.question_type,\n                q.points,\n                sa.answer AS student_answer,\n                sa.is_correct,\n                sa.points_earned\n            FROM quiz_submission_answers sa\n            INNER JOIN quiz_questions q ON q.question_id = sa.question_id\n            LEFT JOIN quiz_submission_questions sqq\n                ON sqq.submission_id = sa.submission_id\n               AND sqq.question_id = sa.question_id\n            WHERE sa.submission_id = :submission_id\n            ORDER BY COALESCE(sqq.position, q.order_index) ASC, q.question_id ASC\n        ");
+        $stmt = $this->db->prepare("
+            SELECT
+                sa.question_id,
+                sa.answer AS student_answer,
+                sa.is_correct,
+                sa.points_earned,
+                sqq.position,
+                sqq.question_snapshot,
+                l.position AS link_position,
+                COALESCE(l.points_override, qn.points) AS points,
+                qn.question_text,
+                qn.correct_answer,
+                qn.explanation,
+                qn.question_type
+            FROM quiz_submission_answers sa
+            LEFT JOIN quiz_submission_questions sqq
+                ON sqq.submission_id = sa.submission_id
+               AND sqq.question_id = sa.question_id
+            LEFT JOIN quiz_submissions sub ON sub.submission_id = sa.submission_id
+            LEFT JOIN quiz_question_links l
+                ON l.quiz_id = sub.quiz_id
+               AND l.question_id = sa.question_id
+            LEFT JOIN questions qn ON qn.question_id = sa.question_id
+            WHERE sa.submission_id = :submission_id
+            ORDER BY COALESCE(sqq.position, l.position) ASC, sa.question_id ASC
+        ");
 
         $stmt->execute(['submission_id' => $submissionId]);
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        foreach ($rows as &$row) {
+            $row['order_index'] = $row['position'] !== null
+                ? (int) $row['position']
+                : (int) ($row['link_position'] ?? 0);
+
+            $snapshot = $this->decodeQuestionSnapshot($row['question_snapshot'] ?? null);
+            if ($snapshot !== null) {
+                $row['question_text'] = $snapshot['question_text'] ?? $row['question_text'];
+                $row['correct_answer'] = $snapshot['correct_answer'] ?? $row['correct_answer'];
+                $row['explanation'] = $snapshot['explanation'] ?? $row['explanation'];
+                $row['question_type'] = $snapshot['question_type'] ?? $row['question_type'];
+                $row['points'] = $snapshot['points'] ?? $row['points'];
+            }
+
+            unset($row['position'], $row['question_snapshot'], $row['link_position']);
+        }
+        unset($row);
+
+        return $rows;
     }
 
     /**

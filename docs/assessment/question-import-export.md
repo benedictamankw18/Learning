@@ -137,7 +137,24 @@ canonical column list. Multiple-choice rows include the correct option label in
 
 The export is not a backup of the whole quiz (title, timing, attempts, and so
 on are not included) — it is a portable question bank extract. Importing it
-into a different quiz copies the questions only.
+into a different quiz links questions that already exist in the teacher's bank
+and creates bank rows only for genuinely new question text.
+
+## Question bank reuse
+
+Question content is stored once in the central bank (see
+[the question bank](question-bank.md)). Import follows that model:
+
+1. If the quiz already contains a question with the same text (case-insensitive,
+   trimmed), the row is reported as `skipped`.
+2. Otherwise, if the quiz's teacher already owns a matching bank question, or
+   the institution owns one, the existing bank row is linked to the quiz and the
+   row is reported as `imported`. The bank row is not duplicated.
+3. Only when no matching bank question is visible does the import create a new
+   bank question.
+
+This means re-importing a file is idempotent and importing an exported quiz
+does not multiply identical questions across the bank.
 
 ## Formula injection protection
 
