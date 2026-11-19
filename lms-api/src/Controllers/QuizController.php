@@ -1673,6 +1673,13 @@ class QuizController
             return;
         }
 
+        // New attempts must fall inside the teacher-configured availability
+        // window. Attempts already in progress remain resumable.
+        if (!$this->repo->isQuizAvailableNow($quiz)) {
+            Response::error('This quiz is not available at this time.', 400);
+            return;
+        }
+
         // Check attempts
         $attempts = $this->repo->getStudentAttempts($id, $studentId);
         if (count($attempts) >= $quiz['max_attempts']) {

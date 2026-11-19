@@ -209,6 +209,33 @@
     return dt.getTime() > Date.now();
   }
 
+  function quizWindowBound(v) {
+    if (!v) return null;
+    const dt = new Date(v);
+    return Number.isNaN(dt.getTime()) ? 'invalid' : dt.getTime();
+  }
+
+  // Mirrors QuizRepository::isQuizAvailableNow: empty bounds are unlimited.
+  function isQuizWindowOpen(quiz) {
+    const now = Date.now();
+    const start = quizWindowBound(quiz?.start_date);
+    const end = quizWindowBound(quiz?.end_date);
+    if (start === 'invalid' || end === 'invalid') return false;
+    if (start !== null && now < start) return false;
+    if (end !== null && now > end) return false;
+    return true;
+  }
+
+  function quizWindowReason(quiz) {
+    const now = Date.now();
+    const start = quizWindowBound(quiz?.start_date);
+    const end = quizWindowBound(quiz?.end_date);
+    if (start === 'invalid' || end === 'invalid') return 'Closed';
+    if (start !== null && now < start) return 'Not Yet Available';
+    if (end !== null && now > end) return 'Closed';
+    return '';
+  }
+
   function getQuizMeta(quiz) {
     const id = quizIdOf(quiz);
     return S.attemptMetaByQuiz.get(id) || {
@@ -239,12 +266,24 @@
       return 'completed';
     }
 
+    // An attempt already in progress may always be continued.
+    if (toNumber(meta.inProgressCount, 0) > 0) {
+      return 'available';
+    }
+
+    if (!isQuizWindowOpen(quiz)) {
+      return 'locked';
+    }
+
     return 'available';
   }
 
-  function statusLabel(status) {
+  function statusLabel(status, quiz) {
     if (status === 'available') return 'Available';
-    if (status === 'locked') return 'Locked';
+    if (status === 'locked') {
+      const reason = quiz ? quizWindowReason(quiz) : '';
+      return reason || 'Locked';
+    }
     if (status === 'completed') return 'Completed';
     return 'Hidden';
   }
@@ -417,9 +456,10 @@
       const questions = toNumber(quiz.question_count, 0);
       const duration = toNumber(quiz.duration_minutes, 0);
       const hasInProgress = toNumber(meta.inProgressCount, 0) > 0;
+      const windowReason = quizWindowReason(quiz);
       const canStart = state !== 'locked' && (meta.attemptsLeft > 0 || hasInProgress);
       const startDisabledTitle = state === 'locked'
-        ? 'Quiz is active but not activated yet'
+        ? (windowReason || 'Quiz is active but not activated yet')
         : 'You have reached the maximum number of attempts for this quiz';
       const startLabel = hasInProgress ? 'Continue' : 'Start';
       const startIcon = hasInProgress ? 'fa-rotate-right' : 'fa-play';
@@ -432,7 +472,7 @@
         '<h4>' + esc(quiz.title || ('Quiz #' + id)) + '</h4>',
         '<p>' + esc(quiz.subject_name || quiz.class_name || 'Subject not set') + '</p>',
         '</div>',
-        '<span class="sq-badge ' + state + '">' + esc(statusLabel(state)) + '</span>',
+        '<span class="sq-badge ' + state + '">' + esc(statusLabel(state, quiz)) + '</span>',
         '</div>',
         '<div class="sq-meta">',
         '<div class="sq-row"><span>Questions</span><strong>' + questions + '</strong></div>',
@@ -447,7 +487,7 @@
         '<button class="sq-btn" data-action="details" data-id="' + id + '"><i class="fas fa-eye"></i> Details</button>',
         canStart
           ? '<button class="sq-btn" style="background:#2563eb;border-color:#2563eb;color:#fff;" data-action="start" data-id="' + id + '"><i class="fas ' + startIcon + '"></i> ' + startLabel + '</button>'
-          : '<button class="sq-btn" disabled title="' + esc(startDisabledTitle) + '"><i class="fas fa-lock"></i> ' + (state === 'locked' ? 'Locked' : 'Max Attempts Reached') + '</button>',
+          : '<button class="sq-btn" disabled title="' + esc(startDisabledTitle) + '"><i class="fas fa-lock"></i> ' + (state === 'locked' ? (windowReason || 'Locked') : 'Max Attempts Reached') + '</button>',
         '</div>',
         '</article>'
       ].join('');
@@ -470,7 +510,7 @@
     E.detailInfo.innerHTML = [
       '<div class="sq-row"><span>Subject</span><strong>' + esc(quiz.subject_name || '-') + '</strong></div>',
       '<div class="sq-row"><span>Class</span><strong>' + esc(quiz.class_name || '-') + '</strong></div>',
-      '<div class="sq-row"><span>Status</span><strong>' + esc(statusLabel(state)) + '</strong></div>',
+      '<div class="sq-row"><span>Status</span><strong>' + esc(statusLabel(state, quiz)) + '</strong></div>',
       '<div class="sq-row"><span>Description</span><strong>' + esc(quiz.description || '-') + '</strong></div>',
       '<div class="sq-row"><span>Duration</span><strong>' + esc(String(toNumber(quiz.duration_minutes, 0))) + ' min</strong></div>',
       '<div class="sq-row"><span>Total Points</span><strong>' + esc(String(toNumber(quiz.total_points, 0))) + '</strong></div>',
@@ -1108,6 +1148,14 @@
       ? forcedSubmissionId
       : toNumber(meta.inProgressSubmissionId, 0);
 
+    if (!isQuizWindowOpen(quiz) && resumableSubmissionId <= 0) {
+      toast(
+        'This quiz is available from ' + formatDateTime(quiz?.start_date)
+          + ' to ' + formatDateTime(quiz?.end_date) + '.',
+        'warning'
+      );
+      return;
+    }
     if (state === 'locked') {
       toast('This quiz is locked and not activated yet.', 'warning');
       return;

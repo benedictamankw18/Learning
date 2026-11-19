@@ -22,6 +22,7 @@ require_once __DIR__ . '/JwtConfigTest.php';
 require_once __DIR__ . '/RefreshTokenRotationTest.php';
 require_once __DIR__ . '/QuizShuffleTest.php';
 require_once __DIR__ . '/QuizBacktrackingTest.php';
+require_once __DIR__ . '/QuizAvailabilityTest.php';
 require_once __DIR__ . '/QuestionCsvTest.php';
 require_once __DIR__ . '/QuestionBankSchemaTest.php';
 require_once __DIR__ . '/QuestionBankTest.php';

@@ -3,6 +3,8 @@
 namespace App\Repositories;
 
 use PDO;
+use DateTime;
+use Exception;
 use App\Config\Database;
 use App\Utils\QuestionVersion;
 
@@ -13,6 +15,35 @@ class QuizRepository
     public function __construct()
     {
         $this->db = Database::getInstance()->getConnection();
+    }
+
+    /**
+     * Whether a quiz is inside its Available From / Available To window.
+     * Empty bounds mean unlimited. An unparseable bound fails closed, and the
+     * injectable clock keeps the boundary checks deterministic in tests.
+     */
+    public function isQuizAvailableNow(array $quiz, ?DateTime $now = null): bool
+    {
+        $now = $now ?? new DateTime();
+
+        foreach (['start_date' => false, 'end_date' => true] as $field => $isUpperBound) {
+            $value = trim((string) ($quiz[$field] ?? ''));
+            if ($value === '') {
+                continue;
+            }
+
+            try {
+                $bound = new DateTime($value);
+            } catch (Exception $e) {
+                return false;
+            }
+
+            if ($isUpperBound ? $now > $bound : $now < $bound) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**
