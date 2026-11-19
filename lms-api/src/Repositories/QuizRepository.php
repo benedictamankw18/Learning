@@ -281,6 +281,210 @@ class QuizRepository
     }
 
     /**
+     * Answers captured as the student leaves each question.
+     *
+     * @return array<int,array{question_id:int,locked:bool,answer:?string}>
+     */
+    public function getSubmissionAnswerLocks(int $submissionId): array
+    {
+        $stmt = $this->db->prepare("
+            SELECT position, question_id, locked_answer, answer_locked
+            FROM quiz_submission_questions
+            WHERE submission_id = :submission_id
+            ORDER BY position ASC
+        ");
+        $stmt->execute(['submission_id' => $submissionId]);
+
+        $locks = [];
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $locks[(int) $row['position']] = [
+                'question_id' => (int) $row['question_id'],
+                'locked' => (int) $row['answer_locked'] === 1,
+                'answer' => $row['locked_answer'],
+            ];
+        }
+
+        return $locks;
+    }
+
+    /**
+     * Record how far a student has progressed in an attempt and capture the
+     * answer they are leaving behind.
+     *
+     * A locked quiz requires an answer before the student may leave a question,
+     * never overwrites an answer that was already captured, and never allows a
+     * jump to a question more than one step ahead. An unlocked quiz may
+     * overwrite its captured answers so going back is still legal.
+     *
+     * @return array{furthest_position:int,answer_locked:bool,error:?string}
+     */
+    public function recordSubmissionProgress(
+        int $submissionId,
+        int $position,
+        int $nextPosition,
+        string $answer,
+        bool $preventBacktracking
+    ): array {
+        $stmt = $this->db->prepare("
+            SELECT furthest_position
+            FROM quiz_submissions
+            WHERE submission_id = :submission_id
+        ");
+        $stmt->execute(['submission_id' => $submissionId]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$row) {
+            return ['furthest_position' => 0, 'answer_locked' => false, 'error' => 'Submission not found'];
+        }
+
+        $furthest = (int) $row['furthest_position'];
+        $locks = $this->getSubmissionAnswerLocks($submissionId);
+        $legacyAttempt = $furthest === 0 && !$this->hasCapturedAnswers($locks);
+
+        if ($preventBacktracking && trim($answer) === '') {
+            return [
+                'furthest_position' => $furthest,
+                'answer_locked' => false,
+                'error' => 'An answer is required before moving to the next question',
+            ];
+        }
+
+        // Attempts started before progress tracking have no history. Let them
+        // catch up once instead of trapping the student on question 1.
+        if ($preventBacktracking && !$legacyAttempt && $nextPosition > $furthest + 1) {
+            return [
+                'furthest_position' => $furthest,
+                'answer_locked' => false,
+                'error' => 'Question navigation is disabled for this quiz',
+            ];
+        }
+
+        $newFurthest = max($furthest, $position, $nextPosition);
+        $questionIds = $this->getSubmissionQuestionOrder($submissionId);
+        $questionId = $questionIds[$position] ?? null;
+        $answerLocked = false;
+
+        if ($questionId !== null) {
+            $lock = $this->db->prepare("
+                UPDATE quiz_submission_questions
+                SET locked_answer = :answer, answer_locked = 1
+                WHERE submission_id = :submission_id
+                  AND question_id = :question_id
+                  AND (:overwrite = 1 OR answer_locked = 0)
+            ");
+            $lock->execute([
+                'answer' => $answer,
+                'submission_id' => $submissionId,
+                'question_id' => $questionId,
+                'overwrite' => $preventBacktracking ? 0 : 1,
+            ]);
+            $answerLocked = $lock->rowCount() > 0;
+        }
+
+        $advance = $this->db->prepare("
+            UPDATE quiz_submissions
+            SET furthest_position = GREATEST(furthest_position, :furthest)
+            WHERE submission_id = :submission_id
+        ");
+        $advance->execute([
+            'furthest' => $newFurthest,
+            'submission_id' => $submissionId,
+        ]);
+
+        return ['furthest_position' => $newFurthest, 'answer_locked' => $answerLocked, 'error' => null];
+    }
+
+    /**
+     * Server-side backstop for "Prevent Going Back".
+     *
+     * Rejects answers to questions that were never reached and answers that
+     * were changed after the student moved on. Returns null when the answers
+     * are acceptable.
+     */
+    public function validateLockedAnswers(int $submissionId, array $answers, bool $preventBacktracking): ?string
+    {
+        if (!$preventBacktracking) {
+            return null;
+        }
+
+        // An attempt that began before progress tracking has no captured
+        // answers to compare against, so it must not be blocked retroactively.
+        $stmt = $this->db->prepare("
+            SELECT furthest_position
+            FROM quiz_submissions
+            WHERE submission_id = :submission_id
+        ");
+        $stmt->execute(['submission_id' => $submissionId]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        $furthest = $row ? (int) $row['furthest_position'] : 0;
+
+        $positions = array_flip($this->getSubmissionQuestionOrder($submissionId));
+        $locks = $this->getSubmissionAnswerLocks($submissionId);
+
+        if ($furthest === 0 && !$this->hasCapturedAnswers($locks)) {
+            return null;
+        }
+
+        foreach ($answers as $answer) {
+            if (!is_array($answer)) {
+                continue;
+            }
+
+            $questionId = (int) ($answer['question_id'] ?? 0);
+            if (!array_key_exists($questionId, $positions)) {
+                continue;
+            }
+
+            $position = $positions[$questionId];
+            if ($position > $furthest) {
+                return 'This answer belongs to a question that was not reached in this attempt.';
+            }
+
+            if (!isset($locks[$position]) || !$locks[$position]['locked']) {
+                continue;
+            }
+
+            $captured = $this->normalizeLockedAnswer($locks[$position]['answer']);
+            if ($captured === '') {
+                return 'An answer is required before moving to the next question';
+            }
+
+            $submitted = $this->normalizeLockedAnswer($answer['answer'] ?? '');
+            if ($submitted !== $captured) {
+                return 'You cannot change an answer after moving to the next question.';
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param array<int,array{question_id:int,locked:bool,answer:?string}> $locks
+     */
+    private function hasCapturedAnswers(array $locks): bool
+    {
+        foreach ($locks as $lock) {
+            if ($lock['locked']) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @param mixed $value
+     */
+    private function normalizeLockedAnswer($value): string
+    {
+        if (is_array($value) || is_object($value)) {
+            return '';
+        }
+
+        return preg_replace('/\s+/', ' ', strtolower(trim((string) $value))) ?? '';
+    }
+
+    /**
      * Return the ordered question IDs for an attempt, creating and persisting
      * the order on first use.
      *
@@ -1297,7 +1501,10 @@ class QuizRepository
                 'submission_id' => $submissionId,
                 'question_id' => $questionId,
                 'answer' => $studentAnswer,
-                'is_correct' => $isCorrect,
+                // Bind an integer: PDO::execute() sends booleans as strings,
+                // so false would become '' and strict-mode MySQL/MariaDB
+                // rejects that value for a tinyint column.
+                'is_correct' => $isCorrect ? 1 : 0,
                 'points_earned' => $pointsEarned
             ]);
         }

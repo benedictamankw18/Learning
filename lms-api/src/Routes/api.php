@@ -388,6 +388,8 @@ return [
     'POST /quiz-submissions/{id}/submit' => ['controller' => 'QuizController', 'method' => 'submitQuiz', 'auth' => true],
     'GET /quiz-submissions/{id}' => ['controller' => 'QuizController', 'method' => 'getSubmissionResults', 'auth' => true],
     'GET /quiz-submissions/{id}/questions' => ['controller' => 'QuizController', 'method' => 'getSubmissionQuestions', 'auth' => true],
+    'GET /quiz-submissions/{id}/policy' => ['controller' => 'QuizController', 'method' => 'getSubmissionPolicy', 'auth' => true],
+    'POST /quiz-submissions/{id}/progress' => ['controller' => 'QuizController', 'method' => 'recordProgress', 'auth' => true],
     'GET /quizzes/{id}/my-attempts' => ['controller' => 'QuizController', 'method' => 'getMyAttempts', 'auth' => true],
 
     // Message routes (Private Messaging)

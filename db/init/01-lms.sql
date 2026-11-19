@@ -2239,6 +2239,7 @@ CREATE TABLE IF NOT EXISTS `quiz_submissions` (
   `quiz_id` int(11) NOT NULL,
   `student_id` int(11) NOT NULL,
   `attempt` int(11) DEFAULT 1,
+  `furthest_position` int(11) NOT NULL DEFAULT 0 COMMENT 'Prevent Going Back: highest 0-based question index reached',
   `score` decimal(10,2) DEFAULT NULL,
   `max_score` decimal(10,2) DEFAULT NULL,
   `status` varchar(50) DEFAULT 'in_progress',

@@ -857,6 +857,177 @@ class QuizController
     }
 
     /**
+     * Current navigation policy for an in-progress attempt.
+     *
+     * The student UI re-reads this before every move so a quiz switched to
+     * "Prevent Going Back" mid-attempt takes effect in already-open tabs.
+     * GET /quiz-submissions/{id}/policy
+     */
+    public function getSubmissionPolicy(array $user, int $id): void
+    {
+        $roleMiddleware = new RoleMiddleware($user);
+        if (!$roleMiddleware->requireRole(['student'])) {
+            return;
+        }
+
+        $studentId = $this->resolveStudentId($user);
+        if ($studentId === null) {
+            Response::forbidden('Student profile not found for this account');
+            return;
+        }
+
+        $submission = $this->repo->getSubmissionById($id);
+        if (!$submission) {
+            Response::error('Submission not found', 404);
+            return;
+        }
+
+        if ((int) $submission['student_id'] !== $studentId
+            || (int) $submission['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::error('Submission not found', 404);
+            return;
+        }
+
+        if (strtolower((string) ($submission['status'] ?? '')) !== 'in_progress') {
+            Response::error('Quiz already submitted', 400);
+            return;
+        }
+
+        $quiz = $this->repo->findById((int) $submission['quiz_id']);
+        if (!$quiz) {
+            Response::error('Quiz not found', 404);
+            return;
+        }
+
+        if (!$this->isQuizActive($quiz)
+            || !$this->courseRepo->isStudentEnrolledInCourse((int) $quiz['course_id'], $studentId)) {
+            Response::error('Quiz not found', 404);
+            return;
+        }
+
+        $questionIds = $this->repo->getSubmissionQuestionOrder($id);
+        if (empty($questionIds)) {
+            $questionIds = $this->repo->ensureSubmissionQuestionOrder(
+                $id,
+                (int) $quiz['quiz_id'],
+                !empty($quiz['randomize_questions'])
+            );
+        }
+
+        Response::success([
+            'submission_id' => $id,
+            'prevent_backtracking' => !empty($quiz['prevent_backtracking']) ? 1 : 0,
+            'furthest_position' => (int) ($submission['furthest_position'] ?? 0),
+            'question_count' => count($questionIds),
+        ]);
+    }
+
+    /**
+     * Record the question a student is leaving, and the answer they gave it.
+     * POST /quiz-submissions/{id}/progress
+     */
+    public function recordProgress(array $user, int $id): void
+    {
+        $roleMiddleware = new RoleMiddleware($user);
+        if (!$roleMiddleware->requireRole(['student'])) {
+            return;
+        }
+
+        $studentId = $this->resolveStudentId($user);
+        if ($studentId === null) {
+            Response::forbidden('Student profile not found for this account');
+            return;
+        }
+
+        $submission = $this->repo->getSubmissionById($id);
+        if (!$submission) {
+            Response::error('Submission not found', 404);
+            return;
+        }
+
+        if ((int) $submission['student_id'] !== $studentId
+            || (int) $submission['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::error('Submission not found', 404);
+            return;
+        }
+
+        if (strtolower((string) ($submission['status'] ?? '')) !== 'in_progress') {
+            Response::error('Quiz already submitted', 400);
+            return;
+        }
+
+        $quiz = $this->repo->findById((int) $submission['quiz_id']);
+        if (!$quiz) {
+            Response::error('Quiz not found', 404);
+            return;
+        }
+
+        if (!$this->isQuizActive($quiz)
+            || !$this->courseRepo->isStudentEnrolledInCourse((int) $quiz['course_id'], $studentId)) {
+            Response::error('Quiz not found', 404);
+            return;
+        }
+
+        $data = json_decode(file_get_contents('php://input'), true);
+        if (!is_array($data)) {
+            Response::error('Invalid JSON payload', 400);
+            return;
+        }
+
+        $validator = new Validator($data);
+        $validator->required(['position', 'next_position'])
+            ->numeric('position')
+            ->numeric('next_position');
+        if ($validator->fails()) {
+            Response::validationError($validator->getErrors());
+            return;
+        }
+
+        $questionIds = $this->repo->getSubmissionQuestionOrder($id);
+        if (empty($questionIds)) {
+            $questionIds = $this->repo->ensureSubmissionQuestionOrder(
+                $id,
+                (int) $quiz['quiz_id'],
+                !empty($quiz['randomize_questions'])
+            );
+        }
+
+        $position = (int) $data['position'];
+        $nextPosition = (int) $data['next_position'];
+        $lastPosition = count($questionIds) - 1;
+        if ($position < 0 || $position > $lastPosition || $nextPosition < 0 || $nextPosition > $lastPosition) {
+            Response::error('Invalid question position', 400);
+            return;
+        }
+
+        $answer = $data['answer'] ?? '';
+        if (is_array($answer) || is_object($answer)) {
+            Response::error('Invalid answer', 400);
+            return;
+        }
+
+        $preventBacktracking = !empty($quiz['prevent_backtracking']);
+        $result = $this->repo->recordSubmissionProgress(
+            $id,
+            $position,
+            $nextPosition,
+            trim((string) $answer),
+            $preventBacktracking
+        );
+
+        if ($result['error'] !== null) {
+            Response::error($result['error'], 400);
+            return;
+        }
+
+        Response::success([
+            'submission_id' => $id,
+            'prevent_backtracking' => $preventBacktracking ? 1 : 0,
+            'furthest_position' => $result['furthest_position'],
+        ]);
+    }
+
+    /**
      * Add question to quiz (teacher/admin)
      * POST /quizzes/{id}/questions
      */
@@ -1585,6 +1756,24 @@ class QuizController
         // Ensure answers is an array
         if (!is_array($data['answers'])) {
             Response::error('Answers must be an array', 400);
+            return;
+        }
+
+        // Server-side backstop for "Prevent Going Back": a stale tab cannot
+        // change an answer it already moved past, or answer an unreached question.
+        $quiz = $this->repo->findById((int) $submission['quiz_id']);
+        if (!$quiz) {
+            Response::error('Quiz not found', 404);
+            return;
+        }
+
+        $answerError = $this->repo->validateLockedAnswers(
+            $id,
+            $data['answers'],
+            !empty($quiz['prevent_backtracking'])
+        );
+        if ($answerError !== null) {
+            Response::error($answerError, 400);
             return;
         }
 

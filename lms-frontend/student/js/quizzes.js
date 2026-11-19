@@ -705,6 +705,73 @@
     }).join('');
   }
 
+  // Re-read the policy before every move: a quiz switched to "Prevent Going
+  // Back" while a tab was open must lock that stale tab on its next click.
+  async function refreshSubmissionPolicy() {
+    if (!S.take || !S.take.submissionId) return;
+    try {
+      const res = await QuizAPI.getSubmissionPolicy(S.take.submissionId);
+      const payload = res?.data || res || {};
+      S.take.preventBacktracking = Number(payload.prevent_backtracking || 0) === 1;
+      S.take.furthestPosition = toNumber(payload.furthest_position, 0);
+    } catch (error) {
+      console.warn('Could not refresh quiz navigation policy', error);
+    }
+    renderQuestionNav();
+    renderCurrentQuestion();
+  }
+
+  // Report the question being left and its answer. The server keeps the first
+  // answer for a locked quiz, so going back in a stale tab cannot change it.
+  async function recordNavigation(fromIndex, toIndex) {
+    if (!S.take || !S.take.submissionId) return false;
+    const question = S.take.questions[fromIndex];
+    const qid = String(question?.question_id || fromIndex);
+    const answer = String(S.take.answers[qid] ?? '').trim();
+
+    try {
+      const res = await QuizAPI.recordProgress(S.take.submissionId, {
+        position: fromIndex,
+        next_position: toIndex,
+        answer: answer,
+      });
+      const payload = res?.data || res || {};
+      S.take.preventBacktracking = Number(payload.prevent_backtracking || 0) === 1;
+      S.take.furthestPosition = toNumber(payload.furthest_position, 0);
+      return true;
+    } catch (error) {
+      toast(error?.message || 'Navigation is blocked for this quiz.', 'error');
+      return false;
+    }
+  }
+
+  async function goToQuestion(idx) {
+    if (!S.take || idx < 0 || idx >= S.take.questions.length) return;
+    const fromIndex = S.take.currentIndex;
+    if (idx === fromIndex) return;
+
+    // With Prevent Going Back, a question must be answered before it can be
+    // left behind. The server enforces the same rule on /progress.
+    if (S.take.preventBacktracking && idx > fromIndex) {
+      const currentQuestion = S.take.questions[fromIndex];
+      const currentQid = String(currentQuestion?.question_id || fromIndex);
+      if (String(S.take.answers[currentQid] ?? '').trim() === '') {
+        toast('Please answer this question before continuing.', 'error');
+        renderQuestionNav();
+        renderCurrentQuestion();
+        return;
+      }
+    }
+
+    const recorded = await recordNavigation(fromIndex, idx);
+    if (!recorded) return;
+
+    S.take.currentIndex = idx;
+    saveDraft(false);
+    renderQuestionNav();
+    renderCurrentQuestion();
+  }
+
   function renderCurrentQuestion() {
     const question = getCurrentQuestion();
     if (!question || !E.questionTitle || !E.questionOptions) return;
@@ -815,7 +882,7 @@
     }, 1000);
   }
 
-  function saveDraft() {
+  function saveDraft(notify = true) {
     if (!S.take || !S.take.quiz) return;
 
     const payload = {
@@ -828,7 +895,8 @@
 
     try {
       localStorage.setItem(draftKey(quizIdOf(S.take.quiz)), JSON.stringify(payload));
-      toast('Draft saved locally.', 'success');
+      // Navigation saves silently; only an explicit Save Draft confirms.
+      if (notify) toast('Draft saved locally.', 'success');
     } catch (error) {
       toast('Unable to save draft on this browser.', 'error');
     }
@@ -1105,8 +1173,7 @@
         E.takeTitle.textContent = 'Take Quiz: ' + String(quiz.title || ('Quiz #' + quizIdOf(quiz)));
       }
 
-      renderQuestionNav();
-      renderCurrentQuestion();
+      await refreshSubmissionPolicy();
       updateTimerDisplay();
       openModal(E.takeModal);
       closeModal(E.detailModal);
@@ -1225,39 +1292,43 @@
           cancelText: 'Stay',
         });
         if (!shouldClose) return;
-        saveDraft();
+        saveDraft(false);
         stopTimer();
         closeModal(E.takeModal);
       }
     });
 
-    E.questionNav?.addEventListener('click', (event) => {
+    E.questionNav?.addEventListener('click', async (event) => {
       const btn = event.target.closest('button[data-q-index]');
-      if (!btn || !S.take || S.take.preventBacktracking) return;
+      if (!btn || !S.take || btn.disabled) return;
       const idx = toNumber(btn.dataset.qIndex, 0);
-      if (idx < 0 || idx >= S.take.questions.length) return;
-      S.take.currentIndex = idx;
-      renderQuestionNav();
-      renderCurrentQuestion();
+      await refreshSubmissionPolicy();
+      if (S.take.preventBacktracking) {
+        renderQuestionNav();
+        renderCurrentQuestion();
+        return;
+      }
+      await goToQuestion(idx);
     });
 
-    E.prevBtn?.addEventListener('click', () => {
-      if (!S.take || S.take.preventBacktracking) return;
-      if (S.take.currentIndex <= 0) return;
-      S.take.currentIndex -= 1;
-      renderQuestionNav();
-      renderCurrentQuestion();
+    E.prevBtn?.addEventListener('click', async () => {
+      if (!S.take || !E.prevBtn || E.prevBtn.disabled) return;
+      await refreshSubmissionPolicy();
+      if (S.take.preventBacktracking) {
+        renderQuestionNav();
+        renderCurrentQuestion();
+        return;
+      }
+      await goToQuestion(S.take.currentIndex - 1);
     });
 
-    E.nextBtn?.addEventListener('click', () => {
-      if (!S.take) return;
-      if (S.take.currentIndex >= S.take.questions.length - 1) return;
-      S.take.currentIndex += 1;
-      renderQuestionNav();
-      renderCurrentQuestion();
+    E.nextBtn?.addEventListener('click', async () => {
+      if (!S.take || !E.nextBtn || E.nextBtn.disabled) return;
+      await refreshSubmissionPolicy();
+      await goToQuestion(S.take.currentIndex + 1);
     });
 
-    E.saveDraftBtn?.addEventListener('click', saveDraft);
+    E.saveDraftBtn?.addEventListener('click', () => saveDraft());
     E.submitQuizBtn?.addEventListener('click', () => {
       submitCurrentQuiz(false).catch(() => {});
     });

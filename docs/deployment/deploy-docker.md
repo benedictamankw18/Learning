@@ -196,6 +196,7 @@ inside the API container:
 docker compose exec api php migrations/create_refresh_tokens_table.php
 docker compose exec api php migrations/add_institution_id_to_announcements.php
 docker compose exec api php migrations/add_prevent_backtracking_to_quizzes.php
+docker compose exec api php migrations/add_quiz_submission_progress.php
 ```
 
 Most migrations check whether a column or table already exists and skip safely. Back up the

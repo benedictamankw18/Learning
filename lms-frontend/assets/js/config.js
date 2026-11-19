@@ -224,6 +224,8 @@ const API_ENDPOINTS = {
     QUIZ_SUBMISSION_SUBMIT: (submissionId) => `/api/quiz-submissions/${submissionId}/submit`,
     QUIZ_SUBMISSION_BY_ID: (submissionId) => `/api/quiz-submissions/${submissionId}`,
     QUIZ_SUBMISSION_QUESTIONS: (submissionId) => `/api/quiz-submissions/${submissionId}/questions`,
+    QUIZ_SUBMISSION_POLICY: (submissionId) => `/api/quiz-submissions/${submissionId}/policy`,
+    QUIZ_SUBMISSION_PROGRESS: (submissionId) => `/api/quiz-submissions/${submissionId}/progress`,
     QUIZ_MY_ATTEMPTS: (id) => `/api/quizzes/${id}/my-attempts`,
     QUIZ_QUESTION_LINK: (id) => `/api/quizzes/${id}/questions/link`,
 

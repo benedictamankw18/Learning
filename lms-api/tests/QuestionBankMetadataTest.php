@@ -512,6 +512,66 @@ test('Pinned versions drive serving, review and grading after a bank edit', func
     }
 });
 
+test('Wrong answers grade as zero under strict SQL mode', function () {
+    $pdo = testDatabase();
+    if (!$pdo) {
+        skip('database is not reachable');
+    }
+    qmetaReady($pdo);
+    if (!testTableExists($pdo, 'quiz_submission_answers')) {
+        skip('submission answers table is not available');
+    }
+
+    $db = Database::getInstance()->getConnection();
+    $repo = new QuizRepository();
+
+    // Local MySQL may not enable strict mode; force it so a boolean bound as
+    // an empty string is rejected the same way it is in the Docker database.
+    $originalMode = (string) $db->query('SELECT @@SESSION.sql_mode')->fetchColumn();
+    $db->exec("SET SESSION sql_mode = CONCAT(@@SESSION.sql_mode, ',STRICT_TRANS_TABLES')");
+
+    $db->beginTransaction();
+    try {
+        $quizId = questionBankQuiz($repo, $pdo, '1C wrong answer ' . uniqid());
+        $questionId = $repo->addQuestion([
+            'quiz_id' => $quizId,
+            'question_text' => '1C strict grading ' . uniqid(),
+            'question_type' => 'short_answer',
+            'points' => 2,
+            'correct_answer' => 'Right',
+        ]);
+
+        $submissionId = 920000000 + random_int(1, 999999);
+        $db->prepare("
+            INSERT INTO quiz_submissions (submission_id, quiz_id, student_id, attempt, status)
+            VALUES (:id, :quiz_id, 0, 1, 'in_progress')
+        ")->execute(['id' => $submissionId, 'quiz_id' => $quizId]);
+
+        $repo->ensureSubmissionQuestionOrder($submissionId, $quizId, false);
+
+        assertTrue($repo->submitQuiz($submissionId, [
+            ['question_id' => $questionId, 'answer' => 'Wrong'],
+        ], 0), 'A wrong answer must still submit cleanly');
+
+        $answerRow = $db->prepare('SELECT is_correct, points_earned FROM quiz_submission_answers WHERE submission_id = :id');
+        $answerRow->execute(['id' => $submissionId]);
+        $answer = $answerRow->fetch(PDO::FETCH_ASSOC);
+        assertSame(0, (int) $answer['is_correct'], 'A wrong answer is stored as zero, not an empty string');
+        assertSame(0, (int) $answer['points_earned'], 'A wrong answer earns no points');
+
+        $submission = $db->prepare('SELECT score, max_score FROM quiz_submissions WHERE submission_id = :id');
+        $submission->execute(['id' => $submissionId]);
+        $score = $submission->fetch(PDO::FETCH_ASSOC);
+        assertSame(0, (int) $score['score']);
+        assertSame(2, (int) $score['max_score']);
+    } finally {
+        if ($db->inTransaction()) {
+            $db->rollBack();
+        }
+        $db->exec('SET SESSION sql_mode = ' . $db->quote($originalMode));
+    }
+});
+
 test('Forking copies bank content into a new private question with its own versions', function () {
     $pdo = testDatabase();
     if (!$pdo) {

@@ -46,6 +46,7 @@ Run the standalone migrations instead, for example:
 
 ```bash
 php lms-api/migrations/add_prevent_backtracking_to_quizzes.php
+php lms-api/migrations/add_quiz_submission_progress.php
 ```
 
 Each migration checks whether its change already exists and skips safely.

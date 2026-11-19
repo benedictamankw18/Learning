@@ -12,6 +12,8 @@ CREATE TABLE IF NOT EXISTS `quiz_submission_questions` (
   `position` int(11) NOT NULL,
   `question_snapshot` json DEFAULT NULL,
   `question_version_id` int(11) DEFAULT NULL COMMENT 'Phase 1C: immutable version served for this attempt',
+  `locked_answer` text DEFAULT NULL COMMENT 'Prevent Going Back: answer captured when this question was left',
+  `answer_locked` tinyint(1) NOT NULL DEFAULT 0 COMMENT 'Prevent Going Back: whether locked_answer is authoritative',
   `created_at` datetime DEFAULT current_timestamp(),
   PRIMARY KEY (`submission_id`,`question_id`),
   KEY `idx_qsq_submission_position` (`submission_id`,`position`),
