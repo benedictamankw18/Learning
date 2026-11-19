@@ -225,6 +225,21 @@ const API_ENDPOINTS = {
     QUIZ_SUBMISSION_BY_ID: (submissionId) => `/api/quiz-submissions/${submissionId}`,
     QUIZ_SUBMISSION_QUESTIONS: (submissionId) => `/api/quiz-submissions/${submissionId}/questions`,
     QUIZ_MY_ATTEMPTS: (id) => `/api/quizzes/${id}/my-attempts`,
+    QUIZ_QUESTION_LINK: (id) => `/api/quizzes/${id}/questions/link`,
+
+    // Question bank (Phase 1C)
+    QUESTION_BANK_QUESTIONS: '/api/question-bank/questions',
+    QUESTION_BANK_QUESTION: (id) => `/api/question-bank/questions/${id}`,
+    QUESTION_BANK_SUBMIT: (id) => `/api/question-bank/questions/${id}/submit-for-approval`,
+    QUESTION_BANK_APPROVE: (id) => `/api/question-bank/questions/${id}/approve`,
+    QUESTION_BANK_REJECT: (id) => `/api/question-bank/questions/${id}/reject`,
+    QUESTION_BANK_FORK: (id) => `/api/question-bank/questions/${id}/fork`,
+    QUESTION_BANK_ARCHIVE: (id) => `/api/question-bank/questions/${id}/archive`,
+    QUESTION_BANK_VERSIONS: (id) => `/api/question-bank/questions/${id}/versions`,
+    QUESTION_BANK_CATEGORIES: '/api/question-bank/categories',
+    QUESTION_BANK_CATEGORY: (id) => `/api/question-bank/categories/${id}`,
+    QUESTION_BANK_TOPICS: '/api/question-bank/topics',
+    QUESTION_BANK_TOPIC: (id) => `/api/question-bank/topics/${id}`,
 
     // Assessment Categories
     ASSESSMENT_CATEGORIES: '/api/assessment-categories',

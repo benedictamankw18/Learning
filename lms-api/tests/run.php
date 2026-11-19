@@ -25,6 +25,7 @@ require_once __DIR__ . '/QuizBacktrackingTest.php';
 require_once __DIR__ . '/QuestionCsvTest.php';
 require_once __DIR__ . '/QuestionBankSchemaTest.php';
 require_once __DIR__ . '/QuestionBankTest.php';
+require_once __DIR__ . '/QuestionBankMetadataTest.php';
 require_once __DIR__ . '/StudentIdTest.php';
 require_once __DIR__ . '/StaticChecksTest.php';
 

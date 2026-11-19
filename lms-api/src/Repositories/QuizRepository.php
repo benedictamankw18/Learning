@@ -4,6 +4,7 @@ namespace App\Repositories;
 
 use PDO;
 use App\Config\Database;
+use App\Utils\QuestionVersion;
 
 class QuizRepository
 {
@@ -227,6 +228,9 @@ class QuizRepository
                 qn.explanation,
                 qn.correct_answer,
                 l.position AS order_index,
+                qn.current_version_id,
+                qn.visibility,
+                qn.approval_status,
                 qn.created_at,
                 qn.updated_at
             FROM quiz_question_links l
@@ -313,12 +317,14 @@ class QuizRepository
                 submission_id,
                 question_id,
                 position,
-                question_snapshot
+                question_snapshot,
+                question_version_id
             ) VALUES (
                 :submission_id,
                 :question_id,
                 :position,
-                :question_snapshot
+                :question_snapshot,
+                :question_version_id
             )
         ");
 
@@ -328,6 +334,7 @@ class QuizRepository
                 'question_id' => $questionId,
                 'position' => $position,
                 'question_snapshot' => $this->buildQuestionSnapshot($questionsById[$questionId]),
+                'question_version_id' => $questionsById[$questionId]['current_version_id'] ?? null,
             ]);
         }
 
@@ -362,10 +369,11 @@ class QuizRepository
     /**
      * Get the questions for an attempt in the student's persisted order.
      *
-     * The stored snapshot wins so an attempt keeps the wording, answer key
-     * and points it was served with even if the bank row is edited later.
-     * Questions without a snapshot (attempts started before phase 1B) fall
-     * back to the current bank content.
+     * The served content wins so an attempt keeps the wording, answer key and
+     * points it was served with even if the bank row is edited later. Phase 1C
+     * attempts pin an immutable question version; legacy Phase 1B attempts
+     * only have a JSON snapshot. Questions with neither (attempts started
+     * before phase 1B) fall back to the current bank content.
      */
     public function getSubmissionQuestions(int $submissionId, int $quizId, bool $shuffle): array
     {
@@ -379,16 +387,16 @@ class QuizRepository
             $bankQuestions[(int) $question['question_id']] = $question;
         }
 
-        $snapshots = $this->getSubmissionQuestionSnapshots($submissionId);
+        $served = $this->getServedQuestionContent($submissionId);
 
         $ordered = [];
         foreach ($questionIds as $position => $questionId) {
             $questionId = (int) $questionId;
 
-            if (isset($snapshots[$questionId])) {
-                $snapshot = $snapshots[$questionId];
-                $snapshot['order_index'] = $position;
-                $ordered[] = $snapshot;
+            if (isset($served[$questionId])) {
+                $content = $served[$questionId];
+                $content['order_index'] = $position;
+                $ordered[] = $content;
                 continue;
             }
 
@@ -403,61 +411,62 @@ class QuizRepository
     }
 
     /**
-     * Decode the per-attempt snapshots for a submission.
+     * Resolve the exact content each question was served with in an attempt.
+     *
+     * Priority:
+     *  1. Phase 1C immutable version (question_version_id), which protects a
+     *     submitted attempt from later bank edits, including approval resets;
+     *  2. Phase 1B JSON snapshot (question_snapshot);
+     *  3. nothing (caller falls back to live bank content).
+     *
+     * The snapshot's points are authoritative when both exist because it
+     * captured the per-quiz points override at serve time, while a version
+     * only stores the bank default.
      *
      * @return array<int,array<string,mixed>>
      */
-    private function getSubmissionQuestionSnapshots(int $submissionId): array
+    private function getServedQuestionContent(int $submissionId): array
     {
         $stmt = $this->db->prepare("
-            SELECT question_id, question_snapshot
+            SELECT question_id, question_snapshot, question_version_id
             FROM quiz_submission_questions
             WHERE submission_id = :submission_id
-              AND question_snapshot IS NOT NULL
         ");
-
         $stmt->execute(['submission_id' => $submissionId]);
 
-        $snapshots = [];
+        $bankRepo = new QuestionBankRepository();
+        $served = [];
         foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
-            $decoded = $this->decodeQuestionSnapshot($row['question_snapshot'] ?? null);
-            if ($decoded !== null) {
-                $snapshots[(int) $row['question_id']] = $decoded;
+            $versionContent = null;
+            if (!empty($row['question_version_id'])) {
+                $versionContent = $bankRepo->findVersionContent((int) $row['question_version_id']);
             }
+            $snapshot = $this->decodeQuestionSnapshot($row['question_snapshot'] ?? null);
+
+            $content = $versionContent ?? $snapshot;
+            if ($content === null) {
+                continue;
+            }
+
+            if ($versionContent !== null && $snapshot !== null) {
+                $content['points'] = $snapshot['points'] ?? $content['points'];
+            }
+
+            $served[(int) $row['question_id']] = $content;
         }
 
-        return $snapshots;
+        return $served;
     }
 
     /**
      * Serialize the question content an attempt was served with.
+     *
+     * Uses the same shape as immutable question versions so serving, review,
+     * and grading all read one normalized format.
      */
     private function buildQuestionSnapshot(array $question): string
     {
-        $options = [];
-        foreach (($question['options'] ?? []) as $option) {
-            if (!is_array($option)) {
-                continue;
-            }
-
-            $options[] = [
-                'label' => (string) ($option['option_label'] ?? ($option['label'] ?? '')),
-                'text' => (string) ($option['option_text'] ?? ($option['text'] ?? '')),
-                'is_correct' => (int) ($option['is_correct'] ?? 0),
-            ];
-        }
-
-        return (string) json_encode([
-            'question_id' => (int) ($question['question_id'] ?? 0),
-            'question_text' => (string) ($question['question_text'] ?? ''),
-            'image_question' => $question['image_question'] ?? null,
-            'question_type' => (string) ($question['question_type'] ?? 'multiple_choice'),
-            'points' => (int) ($question['points'] ?? 1),
-            'difficulty' => $question['difficulty'] ?? null,
-            'explanation' => $question['explanation'] ?? null,
-            'correct_answer' => $question['correct_answer'] ?? null,
-            'options' => $options,
-        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        return QuestionVersion::encode($question);
     }
 
     /**
@@ -465,33 +474,7 @@ class QuizRepository
      */
     private function decodeQuestionSnapshot(?string $raw): ?array
     {
-        if (!is_string($raw) || trim($raw) === '') {
-            return null;
-        }
-
-        $decoded = json_decode($raw, true);
-        if (!is_array($decoded)) {
-            return null;
-        }
-
-        // Normalize snapshot options to the shape getQuestions() returns so
-        // callers do not have to care where a question came from.
-        $options = [];
-        foreach (($decoded['options'] ?? []) as $option) {
-            if (!is_array($option)) {
-                continue;
-            }
-
-            $options[] = [
-                'option_label' => (string) ($option['label'] ?? ($option['option_label'] ?? '')),
-                'option_text' => (string) ($option['text'] ?? ($option['option_text'] ?? '')),
-                'is_correct' => (int) ($option['is_correct'] ?? 0),
-            ];
-        }
-
-        $decoded['options'] = $options;
-
-        return $decoded;
+        return QuestionVersion::decode($raw);
     }
 
     /**
@@ -683,6 +666,13 @@ class QuizRepository
                 array_key_exists('points_override', $data) ? (int) $data['points_override'] : null
             );
 
+            // Phase 1C: freeze version 1 so attempts can pin the content they
+            // were served even if the bank row is edited later.
+            (new QuestionBankRepository())->createVersion(
+                $questionId,
+                isset($data['actor_user_id']) ? (int) $data['actor_user_id'] : null
+            );
+
             if ($ownsTransaction) {
                 $this->db->commit();
             }
@@ -694,6 +684,48 @@ class QuizRepository
             }
             throw $e;
         }
+    }
+
+    /**
+     * Link an existing visible bank question to a quiz.
+     *
+     * This never changes bank content or ownership; it only adds the quiz
+     * link. Visibility is authorized by the controller before calling here.
+     */
+    public function linkExistingQuestion(int $quizId, int $questionId): bool
+    {
+        $context = $this->getQuizQuestionContext($quizId);
+        if ($context === null) {
+            throw new \RuntimeException('Quiz not found');
+        }
+
+        $stmt = $this->db->prepare("
+            SELECT question_id
+            FROM questions
+            WHERE question_id = :question_id
+              AND institution_id = :institution_id
+              AND is_archived = 0
+        ");
+        $stmt->execute([
+            'question_id' => $questionId,
+            'institution_id' => $context['institution_id'],
+        ]);
+        if (!$stmt->fetchColumn()) {
+            return false;
+        }
+
+        $exists = $this->db->prepare("
+            SELECT COUNT(*) FROM quiz_question_links
+            WHERE quiz_id = :quiz_id AND question_id = :question_id
+        ");
+        $exists->execute(['quiz_id' => $quizId, 'question_id' => $questionId]);
+        if ((int) $exists->fetchColumn() > 0) {
+            return false;
+        }
+
+        $this->linkQuestionToQuiz($quizId, $questionId, $this->nextQuestionPosition($quizId));
+
+        return true;
     }
 
     /**
@@ -953,14 +985,17 @@ class QuizRepository
     /**
      * Lookup used by CSV import to find a bank row the importer may reuse.
      *
-     * Only institution-owned questions and the quiz teacher's own questions
-     * are visible, matching the per-teacher bank rule.
+     * Reuse is limited to questions the teacher can actually see: their own
+     * rows, or rows shared with the institution that an administrator has
+     * approved. Drafts, pending submissions, rejected and archived rows are
+     * never borrowed, so an import cannot silently depend on unvetted content.
      */
     private function prepareBankTextLookup(array $context): \PDOStatement
     {
+        $shared = "(visibility = 'institution' AND approval_status = 'approved')";
         $visibility = $context['owner_user_id'] !== null
-            ? '(owner_user_id IS NULL OR owner_user_id = :owner_user_id)'
-            : 'owner_user_id IS NULL';
+            ? "(owner_user_id = :owner_user_id OR {$shared})"
+            : $shared;
 
         $sql = "
             SELECT question_id
@@ -969,7 +1004,7 @@ class QuizRepository
               AND is_archived = 0
               AND TRIM(question_text) = :question_text
               AND {$visibility}
-            ORDER BY CASE WHEN owner_user_id IS NULL THEN 1 ELSE 0 END, question_id ASC
+            ORDER BY question_id ASC
             LIMIT 1
         ";
 
@@ -1054,6 +1089,39 @@ class QuizRepository
                     $sql = "UPDATE quiz_question_links SET " . implode(', ', $linkFields)
                         . " WHERE quiz_id = :quiz_id AND question_id = :question_id";
                     $this->db->prepare($sql)->execute($linkParams);
+                }
+            }
+
+            // Phase 1C: freeze a new immutable version whenever answerable
+            // bank content changes. A quiz-scoped points or order edit only
+            // touches the link, so it must not create a version.
+            $contentFields = [
+                'question_text', 'image_question', 'question_type',
+                'difficulty', 'explanation', 'correct_answer',
+            ];
+            if ($quizId === null) {
+                $contentFields[] = 'points';
+            }
+            $contentChanged = false;
+            foreach ($contentFields as $field) {
+                if (array_key_exists($field, $data)) {
+                    $contentChanged = true;
+                    break;
+                }
+            }
+            if (array_key_exists('options', $data) && is_array($data['options'])) {
+                $contentChanged = true;
+            }
+
+            if ($contentChanged) {
+                $bankRepo = new QuestionBankRepository();
+                $actorId = isset($data['actor_user_id']) ? (int) $data['actor_user_id'] : null;
+                $bankRepo->createVersion($questionId, $actorId);
+
+                // A non-admin edit to a shared question returns it to review
+                // so the institution copy is not silently changed.
+                if (!empty($data['reset_approval_on_edit'])) {
+                    $bankRepo->submitForApproval($questionId, (int) ($actorId ?? 0));
                 }
             }
 
@@ -1167,6 +1235,11 @@ class QuizRepository
         $totalScore = 0;
         $maxScore = 0;
 
+        // Grade against the content each question was served with, not against
+        // a bank edit made while the student was answering. Phase 1C versions
+        // take priority; legacy attempts fall back to their JSON snapshot.
+        $served = $this->getServedQuestionContent($submissionId);
+
         // Process each answer
         foreach ($answers as $answer) {
             $questionId = $answer['question_id'];
@@ -1189,24 +1262,11 @@ class QuizRepository
                 continue;
             }
 
-            // Grade against what the attempt was served, not against a bank
-            // edit that happened while the student was answering.
-            $snapshotStmt = $this->db->prepare("
-                SELECT question_snapshot
-                FROM quiz_submission_questions
-                WHERE submission_id = :submission_id AND question_id = :question_id
-                LIMIT 1
-            ");
-            $snapshotStmt->execute([
-                'submission_id' => $submissionId,
-                'question_id' => $questionId,
-            ]);
-            $snapshot = $this->decodeQuestionSnapshot($snapshotStmt->fetchColumn() ?: null);
-
-            if ($snapshot !== null) {
-                $question['correct_answer'] = $snapshot['correct_answer'] ?? null;
-                $question['question_type'] = $snapshot['question_type'] ?? $question['question_type'];
-                $question['points'] = $snapshot['points'] ?? $question['points'];
+            $servedContent = $served[(int) $questionId] ?? null;
+            if ($servedContent !== null) {
+                $question['correct_answer'] = $servedContent['correct_answer'] ?? $question['correct_answer'];
+                $question['question_type'] = $servedContent['question_type'] ?? $question['question_type'];
+                $question['points'] = $servedContent['points'] ?? $question['points'];
             }
 
             $maxScore += (int) $question['points'];
@@ -1350,18 +1410,20 @@ class QuizRepository
         $stmt->execute(['submission_id' => $submissionId]);
         $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
+        $served = $this->getServedQuestionContent($submissionId);
+
         foreach ($rows as &$row) {
             $row['order_index'] = $row['position'] !== null
                 ? (int) $row['position']
                 : (int) ($row['link_position'] ?? 0);
 
-            $snapshot = $this->decodeQuestionSnapshot($row['question_snapshot'] ?? null);
-            if ($snapshot !== null) {
-                $row['question_text'] = $snapshot['question_text'] ?? $row['question_text'];
-                $row['correct_answer'] = $snapshot['correct_answer'] ?? $row['correct_answer'];
-                $row['explanation'] = $snapshot['explanation'] ?? $row['explanation'];
-                $row['question_type'] = $snapshot['question_type'] ?? $row['question_type'];
-                $row['points'] = $snapshot['points'] ?? $row['points'];
+            $content = $served[(int) $row['question_id']] ?? null;
+            if ($content !== null) {
+                $row['question_text'] = $content['question_text'] ?? $row['question_text'];
+                $row['correct_answer'] = $content['correct_answer'] ?? $row['correct_answer'];
+                $row['explanation'] = $content['explanation'] ?? $row['explanation'];
+                $row['question_type'] = $content['question_type'] ?? $row['question_type'];
+                $row['points'] = $content['points'] ?? $row['points'];
             }
 
             unset($row['position'], $row['question_snapshot'], $row['link_position']);

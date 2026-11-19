@@ -3,6 +3,7 @@
 namespace App\Controllers;
 
 use App\Repositories\QuizRepository;
+use App\Repositories\QuestionBankRepository;
 use App\Repositories\ClassSubjectRepository;
 use App\Repositories\NotificationRepository;
 use App\Repositories\TeacherRepository;
@@ -938,12 +939,68 @@ class QuizController
         }
 
         $data['quiz_id'] = $id;
+        $data['actor_user_id'] = (int) ($user['user_id'] ?? 0);
 
         $questionId = $this->repo->addQuestion($data);
 
         Response::success([
             'message' => 'Question added successfully',
             'question_id' => $questionId
+        ], 201);
+    }
+
+    /**
+     * Link an existing bank question to a quiz (teacher/admin)
+     * POST /quizzes/{id}/questions/link
+     */
+    public function linkExistingQuestion(array $user, int $id): void
+    {
+        $roleMiddleware = new RoleMiddleware($user);
+        if (!$roleMiddleware->requireRole(['admin', 'teacher', 'super_admin'])) {
+            return;
+        }
+
+        $quiz = $this->repo->findById($id);
+        if (!$quiz) {
+            Response::error('Quiz not found', 404);
+            return;
+        }
+
+        if (!AccessControl::isSuperAdmin($user)
+            && (int) $quiz['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::error('Quiz not found', 404);
+            return;
+        }
+
+        if ($roleMiddleware->isTeacher() && !$roleMiddleware->isAdmin()
+            && ($quiz['teacher_id'] ?? 0) != ($user['teacher_id'] ?? 0)) {
+            Response::forbidden('You can only add questions to your own quizzes');
+            return;
+        }
+
+        $data = json_decode(file_get_contents('php://input'), true);
+        if (!is_array($data) || !isset($data['question_id']) || !is_numeric($data['question_id'])) {
+            Response::validationError(['question_id' => ['question_id is required']]);
+            return;
+        }
+
+        $questionId = (int) $data['question_id'];
+        $question = (new QuestionBankRepository())->findVisibleQuestion($questionId, $user);
+        if (!$question) {
+            Response::error('Question not found', 404);
+            return;
+        }
+
+        if (!$this->repo->linkExistingQuestion($id, $questionId)) {
+            Response::validationError([
+                'question_id' => ['This question is unavailable or is already in the quiz'],
+            ]);
+            return;
+        }
+
+        Response::success([
+            'message' => 'Question added from the bank',
+            'question_id' => $questionId,
         ], 201);
     }
 
@@ -1025,6 +1082,7 @@ class QuizController
                     $question['image_question'] = $this->normalizeImageQuestionPath($question['image_question']);
                 }
 
+                $question['actor_user_id'] = (int) ($user['user_id'] ?? 0);
                 $prepared[] = ['row' => $rowNumber, 'question' => $question];
             } catch (Exception $e) {
                 $invalid++;
@@ -1269,6 +1327,11 @@ class QuizController
 
             $data['options'] = $normalizedOptions;
         }
+
+        // Phase 1C: version the edit and return a shared question to review
+        // when a non-admin changes its content.
+        $data['actor_user_id'] = (int) ($user['user_id'] ?? 0);
+        $data['reset_approval_on_edit'] = !($isSuperAdmin || $isAdmin);
 
         $this->repo->updateQuestion($id, $data, $quizId);
 

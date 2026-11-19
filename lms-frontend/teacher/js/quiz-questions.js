@@ -35,6 +35,12 @@
     state.els.publishBtn = document.getElementById("quizQuestionsPublishBtn");
     state.els.resultsBtn = document.getElementById("quizQuestionsResultsBtn");
     state.els.exportBtn = document.getElementById("quizQuestionsExportBtn");
+    state.els.fromBankBtn = document.getElementById("quizQuestionsFromBankBtn");
+    state.els.fromBankBtn2 = document.getElementById("quizQuestionsFromBankBtn2");
+    state.els.bankPickerModal = document.getElementById("quizBankPickerModal");
+    state.els.bankPickerClose = document.getElementById("quizBankPickerClose");
+    state.els.bankPickerSearch = document.getElementById("quizBankPickerSearch");
+    state.els.bankPickerList = document.getElementById("quizBankPickerList");
 
     state.els.form = document.getElementById("quizQuestionForm");
     state.els.submitBtn = document.getElementById("questionSubmitBtn");
@@ -727,6 +733,109 @@
     }
   }
 
+  /* ---------------- Link existing bank question ---------------- */
+
+  function openBankPicker() {
+    if (!state.els.bankPickerModal) {
+      return;
+    }
+    state.els.bankPickerModal.classList.add("open");
+    state.els.bankPickerSearch.value = "";
+    loadBankPickerQuestions("");
+  }
+
+  function closeBankPicker() {
+    if (state.els.bankPickerModal) {
+      state.els.bankPickerModal.classList.remove("open");
+    }
+  }
+
+  async function loadBankPickerQuestions(search) {
+    if (!state.els.bankPickerList) {
+      return;
+    }
+    state.els.bankPickerList.innerHTML = '<div class="tqq-loading">Loading questions...</div>';
+    try {
+      const params = { limit: 100 };
+      if (search) {
+        params.q = search;
+      }
+      const response = await QuestionBankAPI.getQuestions(params);
+      const rows = (response && response.data && Array.isArray(response.data.questions))
+        ? response.data.questions
+        : [];
+      renderBankPickerList(rows);
+    } catch (error) {
+      state.els.bankPickerList.innerHTML = '<div class="tqq-error">' + escapeHtml(error.message || "Failed to load bank questions.") + '</div>';
+    }
+  }
+
+  function renderBankPickerList(rows) {
+    if (!state.els.bankPickerList) {
+      return;
+    }
+    if (!rows.length) {
+      state.els.bankPickerList.innerHTML = '<div class="tqq-empty">No visible bank questions found.</div>';
+      return;
+    }
+    const linkedIds = new Set(state.questions.map((q) => String(q.id)));
+    state.els.bankPickerList.innerHTML = rows.map((q) => {
+      const already = linkedIds.has(String(q.question_id));
+      const text = String(q.question_text || "");
+      const preview = text.length > 130 ? text.substring(0, 130) + "…" : text;
+      const meta = [getTypeLabel(q.question_type), (q.points != null ? q.points + " pts" : ""), q.approval_status].filter(Boolean).join(" · ");
+      return '<div class="tqq-picker-item">' +
+        '<div class="tqq-picker-text">' + escapeHtml(preview) +
+          '<div class="tqq-picker-meta">' + escapeHtml(meta) + '</div>' +
+        '</div>' +
+        (already
+          ? '<span class="tqq-muted" style="font-size:0.75rem;">In quiz</span>'
+          : '<button class="tqq-btn-primary" data-action="link" data-id="' + q.question_id + '" type="button" style="font-size:0.78rem;padding:0.4rem 0.7rem;">Link</button>') +
+        '</div>';
+    }).join("");
+  }
+
+  async function linkBankQuestion(questionId) {
+    try {
+      const response = await QuizAPI.linkExistingQuestion(state.quizId, questionId);
+      if (!response || !response.success) {
+        throw new Error(response && response.message ? response.message : "Failed to link question");
+      }
+      closeBankPicker();
+      setNotice("Question linked from bank", "success");
+      await loadQuestions();
+    } catch (error) {
+      setNotice(error.message || "Unable to link question.", "error");
+    }
+  }
+
+  function bindBankPickerEvents() {
+    [state.els.fromBankBtn, state.els.fromBankBtn2].forEach((btn) => {
+      if (btn) btn.addEventListener("click", openBankPicker);
+    });
+    if (state.els.bankPickerClose) {
+      state.els.bankPickerClose.addEventListener("click", closeBankPicker);
+    }
+    if (state.els.bankPickerModal) {
+      state.els.bankPickerModal.addEventListener("click", (e) => {
+        if (e.target === state.els.bankPickerModal) closeBankPicker();
+      });
+    }
+    if (state.els.bankPickerSearch) {
+      let timer = null;
+      state.els.bankPickerSearch.addEventListener("input", () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => loadBankPickerQuestions(state.els.bankPickerSearch.value.trim()), 300);
+      });
+    }
+    if (state.els.bankPickerList) {
+      state.els.bankPickerList.addEventListener("click", (e) => {
+        const btn = e.target.closest('button[data-action="link"]');
+        if (btn) linkBankQuestion(btn.dataset.id);
+      });
+    }
+  }
+
   function bindEvents() {
     if (!state.els.root) {
       return;
@@ -775,6 +884,10 @@
       bindEvents();
       state.initialized = true;
     }
+
+    // The picker modal lives in the page fragment, so its nodes are recreated
+    // on every navigation. Bind its events each time against the fresh nodes.
+    bindBankPickerEvents();
 
     resetForm();
     state.els.questionDetails.className = "tqq-details";

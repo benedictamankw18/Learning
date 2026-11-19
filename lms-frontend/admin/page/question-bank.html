@@ -1,0 +1,194 @@
+<style>
+  .qb-wrap { display: grid; gap: 1rem; }
+  .qb-tabs { display: flex; gap: 0.5rem; border-bottom: 1px solid #e2e8f0; margin-bottom: 1rem; }
+  .qb-tab {
+    padding: 0.5rem 1rem; cursor: pointer; font-size: 0.85rem; font-weight: 600;
+    color: #64748b; border-bottom: 2px solid transparent; background: none; border-top: none; border-left: none; border-right: none;
+  }
+  .qb-tab.active { color: var(--primary); border-bottom-color: var(--primary); }
+  .qb-panel { display: none; }
+  .qb-panel.active { display: block; }
+  .qb-toolbar { display: flex; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; align-items: flex-end; margin-bottom: 1rem; }
+  .qb-filters { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: flex-end; }
+  .qb-field { display: flex; flex-direction: column; gap: 0.25rem; }
+  .qb-field label { font-size: 0.72rem; color: #64748b; font-weight: 600; }
+  .qb-field input, .qb-field select, .qb-field textarea {
+    border: 1px solid #cbd5e1; border-radius: 8px; padding: 0.45rem 0.6rem;
+    font-size: 0.85rem; background: #fff; color: #0f172a; min-width: 130px;
+  }
+  .qb-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+  .qb-btn { border: none; border-radius: 8px; padding: 0.5rem 0.9rem; font-size: 0.82rem; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+  .qb-btn-primary { background: var(--primary); color: #fff; }
+  .qb-btn-primary:hover { background: var(--primary-light); }
+  .qb-btn-secondary { background: #f1f5f9; color: #0f172a; border: 1px solid #cbd5e1; }
+  .qb-btn-secondary:hover { background: #e2e8f0; }
+  .qb-btn-danger { background: #dc2626; color: #fff; }
+  .qb-btn-danger:hover { background: #b91c1c; }
+  .qb-btn-sm { padding: 0.3rem 0.55rem; font-size: 0.75rem; }
+  .qb-notice { padding: 0.6rem 0.75rem; border-radius: 8px; font-size: 0.85rem; display: none; }
+  .qb-notice.error { display: block; background: #fef2f2; color: #b91c1c; }
+  .qb-notice.success { display: block; background: #ecfdf5; color: #047857; }
+  .qb-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+  .qb-table th, .qb-table td { text-align: left; padding: 0.55rem 0.6rem; border-bottom: 1px solid #e2e8f0; vertical-align: top; }
+  .qb-table th { color: #475569; font-weight: 600; background: #f8fafc; }
+  .qb-badge { display: inline-block; padding: 0.15rem 0.45rem; border-radius: 999px; font-size: 0.7rem; font-weight: 600; white-space: nowrap; }
+  .qb-badge-draft { background: #e2e8f0; color: #475569; }
+  .qb-badge-pending { background: #fef3c7; color: #92400e; }
+  .qb-badge-approved { background: #d1fae5; color: #065f46; }
+  .qb-badge-rejected { background: #fee2e2; color: #991b1b; }
+  .qb-row-actions { display: flex; gap: 0.25rem; flex-wrap: wrap; }
+  .qb-empty { padding: 1.5rem; text-align: center; color: #64748b; }
+  .qb-pagination { display: flex; gap: 0.4rem; align-items: center; justify-content: flex-end; margin-top: 0.75rem; }
+  .qb-pagination button { border: 1px solid #cbd5e1; background: #fff; border-radius: 6px; padding: 0.3rem 0.6rem; cursor: pointer; font-size: 0.8rem; }
+  .qb-pagination button:disabled { opacity: 0.5; cursor: default; }
+  .qb-pagination .active { background: var(--primary); color: #fff; border-color: var(--primary); }
+  .qb-modal-overlay { position: fixed; inset: 0; background: rgba(15,23,42,0.55); display: none; align-items: center; justify-content: center; z-index: 1000; padding: 1rem; }
+  .qb-modal-overlay.open { display: flex; }
+  .qb-modal { background: #fff; border-radius: 12px; width: min(760px, 100%); max-height: 90vh; overflow: auto; box-shadow: 0 20px 60px rgba(0,0,0,0.3); }
+  .qb-modal-header { display: flex; justify-content: space-between; align-items: center; padding: 1rem 1.25rem; border-bottom: 1px solid #e2e8f0; }
+  .qb-modal-header h3 { margin: 0; font-size: 1.05rem; }
+  .qb-modal-body { padding: 1.25rem; display: grid; gap: 0.9rem; }
+  .qb-modal-footer { display: flex; justify-content: flex-end; gap: 0.5rem; padding: 1rem 1.25rem; border-top: 1px solid #e2e8f0; }
+  .qb-taxonomy-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; }
+  .qb-tax-card { border: 1px solid #e2e8f0; border-radius: 10px; padding: 1rem; }
+  .qb-tax-card h4 { margin: 0 0 0.75rem; font-size: 0.95rem; }
+  .qb-tax-form { display: flex; gap: 0.5rem; margin-bottom: 0.75rem; flex-wrap: wrap; }
+  .qb-tax-form input, .qb-tax-form select { border: 1px solid #cbd5e1; border-radius: 8px; padding: 0.4rem 0.55rem; font-size: 0.82rem; flex: 1; min-width: 110px; }
+  .qb-tax-list { display: grid; gap: 0.4rem; max-height: 360px; overflow: auto; }
+  .qb-tax-item { display: flex; justify-content: space-between; align-items: center; padding: 0.45rem 0.55rem; border: 1px solid #e2e8f0; border-radius: 6px; font-size: 0.82rem; }
+  .qb-tax-item-actions { display: flex; gap: 0.25rem; }
+  .qb-version { border: 1px solid #e2e8f0; border-radius: 8px; padding: 0.75rem; margin-bottom: 0.6rem; }
+  .qb-version h4 { margin: 0 0 0.4rem; font-size: 0.9rem; }
+  .qb-version p { margin: 0.2rem 0; font-size: 0.8rem; color: #475569; }
+  .qb-text-preview { max-width: 300px; }
+  @media (max-width: 860px) { .qb-taxonomy-grid { grid-template-columns: 1fr; } }
+</style>
+
+<div id="adminQuestionBankRoot" class="qb-wrap">
+  <div class="card">
+    <div class="card-header">
+      <h3><i class="fas fa-database"></i> Question Bank</h3>
+    </div>
+    <div class="card-body">
+      <div id="qbAdminNotice" class="qb-notice"></div>
+
+      <div class="qb-tabs">
+        <button class="qb-tab active" data-tab="questions" type="button"><i class="fas fa-list-check"></i> Questions &amp; Approvals</button>
+        <button class="qb-tab" data-tab="taxonomy" type="button"><i class="fas fa-tags"></i> Categories &amp; Topics</button>
+      </div>
+
+      <!-- Questions panel -->
+      <div id="qbAdminQuestionsPanel" class="qb-panel active">
+        <div class="qb-toolbar">
+          <div class="qb-filters">
+            <div class="qb-field">
+              <label for="qbAdminSearch">Search</label>
+              <input type="text" id="qbAdminSearch" placeholder="Search question text..." />
+            </div>
+            <div class="qb-field">
+              <label for="qbAdminFilterStatus">Status</label>
+              <select id="qbAdminFilterStatus">
+                <option value="pending">Pending (review queue)</option>
+                <option value="">All statuses</option>
+                <option value="draft">Draft</option>
+                <option value="approved">Approved</option>
+                <option value="rejected">Rejected</option>
+              </select>
+            </div>
+            <div class="qb-field">
+              <label for="qbAdminFilterCategory">Category</label>
+              <select id="qbAdminFilterCategory"><option value="">All categories</option></select>
+            </div>
+            <div class="qb-field">
+              <label for="qbAdminFilterSubject">Subject</label>
+              <select id="qbAdminFilterSubject"><option value="">All subjects</option></select>
+            </div>
+          </div>
+          <div class="qb-actions">
+            <button id="qbAdminRefreshBtn" class="qb-btn qb-btn-secondary" type="button"><i class="fas fa-sync-alt"></i> Refresh</button>
+          </div>
+        </div>
+
+        <div style="overflow-x: auto;">
+          <table class="qb-table">
+            <thead>
+              <tr>
+                <th style="width: 32%;">Question</th>
+                <th>Type</th>
+                <th>Category</th>
+                <th>Owner</th>
+                <th>Status</th>
+                <th>Sharing</th>
+                <th style="width: 22%;">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="qbAdminListBody">
+              <tr><td colspan="7" class="qb-empty">Loading questions...</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="qb-pagination" id="qbAdminPagination"></div>
+      </div>
+
+      <!-- Taxonomy panel -->
+      <div id="qbAdminTaxonomyPanel" class="qb-panel">
+        <div class="qb-taxonomy-grid">
+          <div class="qb-tax-card">
+            <h4><i class="fas fa-folder"></i> Categories</h4>
+            <div class="qb-tax-form">
+              <input type="text" id="qbNewCategoryName" placeholder="Category name" />
+              <select id="qbNewCategoryParent"><option value="">No parent</option></select>
+              <button id="qbAddCategoryBtn" class="qb-btn qb-btn-primary qb-btn-sm" type="button">Add</button>
+            </div>
+            <div class="qb-tax-list" id="qbCategoryList"></div>
+          </div>
+          <div class="qb-tax-card">
+            <h4><i class="fas fa-bookmark"></i> Topics</h4>
+            <div class="qb-tax-form">
+              <input type="text" id="qbNewTopicName" placeholder="Topic name" />
+              <select id="qbNewTopicSubject"><option value="">General (no subject)</option></select>
+              <button id="qbAddTopicBtn" class="qb-btn qb-btn-primary qb-btn-sm" type="button">Add</button>
+            </div>
+            <div class="qb-tax-list" id="qbTopicList"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Review modal (approve / reject with note) -->
+<div id="qbReviewModal" class="qb-modal-overlay">
+  <div class="qb-modal" style="width: min(560px, 100%);">
+    <div class="qb-modal-header">
+      <h3 id="qbReviewTitle">Review Question</h3>
+      <button id="qbReviewClose" class="qb-btn qb-btn-secondary qb-btn-sm" type="button">&times;</button>
+    </div>
+    <div class="qb-modal-body">
+      <div id="qbReviewPreview" style="background:#f8fafc;padding:0.75rem;border-radius:8px;font-size:0.85rem;"></div>
+      <div class="qb-field">
+        <label for="qbReviewNote">Review note (required to reject, optional to approve)</label>
+        <textarea id="qbReviewNote" rows="3"></textarea>
+      </div>
+    </div>
+    <div class="qb-modal-footer">
+      <button id="qbReviewCancel" class="qb-btn qb-btn-secondary" type="button">Cancel</button>
+      <button id="qbReviewReject" class="qb-btn qb-btn-danger" type="button">Reject</button>
+      <button id="qbReviewApprove" class="qb-btn qb-btn-primary" type="button">Approve</button>
+    </div>
+  </div>
+</div>
+
+<!-- Versions modal -->
+<div id="qbAdminVersionsModal" class="qb-modal-overlay">
+  <div class="qb-modal">
+    <div class="qb-modal-header">
+      <h3 id="qbAdminVersionsTitle">Version History</h3>
+      <button id="qbAdminVersionsClose" class="qb-btn qb-btn-secondary qb-btn-sm" type="button">&times;</button>
+    </div>
+    <div class="qb-modal-body" id="qbAdminVersionsBody"></div>
+    <div class="qb-modal-footer">
+      <button id="qbAdminVersionsDone" class="qb-btn qb-btn-secondary" type="button">Close</button>
+    </div>
+  </div>
+</div>

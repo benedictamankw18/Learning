@@ -28,6 +28,19 @@ CREATE TABLE IF NOT EXISTS `questions` (
   `explanation` text DEFAULT NULL,
   `correct_answer` varchar(500) DEFAULT NULL,
   `is_archived` tinyint(1) NOT NULL DEFAULT 0,
+  -- Phase 1C metadata. Existing rows are grandfathered as approved and
+  -- institution-visible by the metadata migration.
+  `category_id` int(11) DEFAULT NULL,
+  `subject_id` int(11) DEFAULT NULL,
+  `topic_id` int(11) DEFAULT NULL,
+  `visibility` enum('private','institution') NOT NULL DEFAULT 'private',
+  `approval_status` enum('draft','pending','approved','rejected') NOT NULL DEFAULT 'draft',
+  `submitted_at` datetime DEFAULT NULL,
+  `reviewed_by` int(11) DEFAULT NULL,
+  `reviewed_at` datetime DEFAULT NULL,
+  `review_note` text DEFAULT NULL,
+  `forked_from_id` int(11) DEFAULT NULL,
+  `current_version_id` int(11) DEFAULT NULL,
   `created_at` datetime DEFAULT current_timestamp(),
   `updated_at` datetime DEFAULT current_timestamp() ON UPDATE current_timestamp(),
   PRIMARY KEY (`question_id`),
@@ -35,7 +48,12 @@ CREATE TABLE IF NOT EXISTS `questions` (
   KEY `idx_questions_owner` (`owner_user_id`),
   KEY `idx_questions_type` (`question_type`),
   KEY `idx_questions_archived` (`is_archived`),
-  KEY `idx_questions_institution_type` (`institution_id`,`question_type`)
+  KEY `idx_questions_institution_type` (`institution_id`,`question_type`),
+  KEY `idx_questions_visibility` (`visibility`),
+  KEY `idx_questions_approval` (`approval_status`),
+  KEY `idx_questions_category` (`category_id`),
+  KEY `idx_questions_subject` (`subject_id`),
+  KEY `idx_questions_topic` (`topic_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS `question_bank_options` (

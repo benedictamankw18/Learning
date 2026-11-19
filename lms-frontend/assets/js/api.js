@@ -533,6 +533,7 @@ const QuizAPI = {
     delete: (id) => API.delete(API_ENDPOINTS.QUIZ_BY_ID(id)),
     getQuestions: (id) => API.get(API_ENDPOINTS.QUIZ_QUESTIONS(id)),
     addQuestion: (id, data) => API.post(API_ENDPOINTS.QUIZ_QUESTIONS(id), data),
+    linkExistingQuestion: (id, questionId) => API.post(API_ENDPOINTS.QUIZ_QUESTION_LINK(id), { question_id: questionId }),
     importQuestions: (id, formData) => API.upload(API_ENDPOINTS.QUIZ_QUESTION_IMPORT(id), formData),
     exportQuestions: (id) => API.download(
         API_ENDPOINTS.QUIZ_QUESTION_EXPORT(id),
@@ -549,6 +550,33 @@ const QuizAPI = {
     deleteQuestion: (id, quizId) => API.delete(
         API_ENDPOINTS.QUIZ_QUESTION_BY_ID(id) + (quizId ? `?quiz_id=${encodeURIComponent(quizId)}` : '')
     ),
+};
+
+/**
+ * Question bank APIs (Phase 1C)
+ */
+const QuestionBankAPI = {
+    getQuestions: (params) => API.get(API_ENDPOINTS.QUESTION_BANK_QUESTIONS, params),
+    createQuestion: (data) => API.post(API_ENDPOINTS.QUESTION_BANK_QUESTIONS, data),
+    getQuestion: (id) => API.get(API_ENDPOINTS.QUESTION_BANK_QUESTION(id)),
+    updateQuestion: (id, data) => API.put(API_ENDPOINTS.QUESTION_BANK_QUESTION(id), data),
+    submitForApproval: (id) => API.post(API_ENDPOINTS.QUESTION_BANK_SUBMIT(id), {}),
+    approve: (id, note) => API.post(API_ENDPOINTS.QUESTION_BANK_APPROVE(id), note ? { note } : {}),
+    reject: (id, note) => API.post(API_ENDPOINTS.QUESTION_BANK_REJECT(id), { note }),
+    fork: (id) => API.post(API_ENDPOINTS.QUESTION_BANK_FORK(id), {}),
+    archive: (id, isArchived) => API.post(API_ENDPOINTS.QUESTION_BANK_ARCHIVE(id), { is_archived: isArchived }),
+    getVersions: (id) => API.get(API_ENDPOINTS.QUESTION_BANK_VERSIONS(id)),
+    getCategories: () => API.get(API_ENDPOINTS.QUESTION_BANK_CATEGORIES),
+    createCategory: (data) => API.post(API_ENDPOINTS.QUESTION_BANK_CATEGORIES, data),
+    updateCategory: (id, data) => API.put(API_ENDPOINTS.QUESTION_BANK_CATEGORY(id), data),
+    deleteCategory: (id) => API.delete(API_ENDPOINTS.QUESTION_BANK_CATEGORY(id)),
+    getTopics: (subjectId) => API.get(
+        API_ENDPOINTS.QUESTION_BANK_TOPICS,
+        subjectId ? { subject_id: subjectId } : undefined
+    ),
+    createTopic: (data) => API.post(API_ENDPOINTS.QUESTION_BANK_TOPICS, data),
+    updateTopic: (id, data) => API.put(API_ENDPOINTS.QUESTION_BANK_TOPIC(id), data),
+    deleteTopic: (id) => API.delete(API_ENDPOINTS.QUESTION_BANK_TOPIC(id)),
 };
 
 /**

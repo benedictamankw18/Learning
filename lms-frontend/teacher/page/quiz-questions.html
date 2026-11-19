@@ -334,6 +334,13 @@
             <i class="fas fa-arrow-left"></i> Back
           </button>
           <button
+            id="quizQuestionsFromBankBtn"
+            class="tqq-btn-secondary"
+            type="button"
+          >
+            <i class="fas fa-database"></i> From Bank
+          </button>
+          <button
             id="quizQuestionsPreviewBtn"
             class="tqq-btn-secondary"
             type="button"
@@ -555,10 +562,13 @@
         </div>
 
         <div class="card">
-          <div class="card-header">
+          <div class="card-header" style="display: flex; justify-content: space-between; align-items: center;">
             <h3 style="font-size: 0.95rem">
               <i class="fas fa-database"></i> Question Bank
             </h3>
+            <button id="quizQuestionsFromBankBtn2" class="tqq-btn-secondary" type="button" style="font-size: 0.75rem; padding: 0.3rem 0.6rem;">
+              <i class="fas fa-link"></i> Link existing
+            </button>
           </div>
           <div class="card-body" style="padding: 0">
             <div class="tqq-list">
@@ -576,6 +586,50 @@
             <div id="questionDetails" class="tqq-details"></div>
           </div>
         </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<style>
+  .tqq-picker-overlay {
+    position: fixed; inset: 0; background: rgba(15, 23, 42, 0.55);
+    display: none; align-items: center; justify-content: center; z-index: 1000; padding: 1rem;
+  }
+  .tqq-picker-overlay.open { display: flex; }
+  .tqq-picker-modal {
+    background: #fff; border-radius: 12px; width: min(680px, 100%);
+    max-height: 88vh; overflow: auto; box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+  }
+  .tqq-picker-header {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 1rem 1.25rem; border-bottom: 1px solid #e2e8f0;
+  }
+  .tqq-picker-header h3 { margin: 0; font-size: 1rem; }
+  .tqq-picker-body { padding: 1rem 1.25rem; }
+  .tqq-picker-search {
+    width: 100%; border: 1px solid #cbd5e1; border-radius: 8px;
+    padding: 0.5rem 0.7rem; font-size: 0.85rem; margin-bottom: 0.75rem;
+  }
+  .tqq-picker-list { display: grid; gap: 0.5rem; max-height: 420px; overflow: auto; }
+  .tqq-picker-item {
+    display: flex; justify-content: space-between; gap: 0.75rem; align-items: center;
+    border: 1px solid #e2e8f0; border-radius: 8px; padding: 0.6rem 0.75rem;
+  }
+  .tqq-picker-item .tqq-picker-text { font-size: 0.85rem; flex: 1; }
+  .tqq-picker-item .tqq-picker-meta { font-size: 0.72rem; color: #64748b; }
+</style>
+
+<div id="quizBankPickerModal" class="tqq-picker-overlay">
+  <div class="tqq-picker-modal">
+    <div class="tqq-picker-header">
+      <h3><i class="fas fa-database"></i> Link Question from Bank</h3>
+      <button id="quizBankPickerClose" class="tqq-btn-secondary" type="button">&times;</button>
+    </div>
+    <div class="tqq-picker-body">
+      <input type="text" id="quizBankPickerSearch" class="tqq-picker-search" placeholder="Search visible bank questions..." />
+      <div id="quizBankPickerList" class="tqq-picker-list">
+        <div class="tqq-loading">Loading questions...</div>
       </div>
     </div>
   </div>
