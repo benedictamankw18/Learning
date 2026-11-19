@@ -316,13 +316,67 @@ test('Locked navigation requires an answer before advancing', function () {
         ");
         $blankCapture->execute(['submission_id' => $submissionId, 'question_id' => $ids[0]]);
 
-        assertNotNull(
+        assertSame(
+            null,
             $repo->validateLockedAnswers(
                 $submissionId,
-                [['question_id' => $ids[0], 'answer' => '']],
+                [['question_id' => $ids[0], 'answer' => 'B']],
                 true
             ),
-            'A blank captured answer must be rejected at submit'
+            'Blank legacy captures must not block submission'
+        );
+    } finally {
+        if ($db->inTransaction()) {
+            $db->rollBack();
+        }
+    }
+});
+
+test('Legacy blank captures do not block the final answer', function () {
+    $pdo = testDatabase();
+    if (!$pdo) {
+        skip('database is not reachable');
+    }
+    if (!testTableExists($pdo, 'quiz_submission_questions')
+        || !$pdo->query("SHOW COLUMNS FROM quiz_submission_questions LIKE 'answer_locked'")->fetch()) {
+        skip('run migrations/add_quiz_submission_progress.php');
+    }
+
+    $db = Database::getInstance()->getConnection();
+    $db->beginTransaction();
+
+    try {
+        $repo = new QuizRepository();
+        $attempt = backtrackingAttempt($repo, $pdo, $db, 'Backtracking legacy blanks ' . uniqid(), 4);
+        $submissionId = $attempt['submission_id'];
+        $ids = $attempt['question_ids'];
+
+        // Older clients captured blanks for every question they left behind.
+        $blankCapture = $db->prepare("
+            UPDATE quiz_submission_questions
+            SET locked_answer = '', answer_locked = 1
+            WHERE submission_id = :submission_id AND question_id = :question_id
+        ");
+        foreach (array_slice($ids, 0, 3) as $questionId) {
+            $blankCapture->execute(['submission_id' => $submissionId, 'question_id' => $questionId]);
+        }
+
+        $advance = $db->prepare("
+            UPDATE quiz_submissions
+            SET furthest_position = 3
+            WHERE submission_id = :submission_id
+        ");
+        $advance->execute(['submission_id' => $submissionId]);
+
+        $answers = [];
+        foreach ($ids as $questionId) {
+            $answers[] = ['question_id' => $questionId, 'answer' => 'Answer ' . $questionId];
+        }
+
+        assertSame(
+            null,
+            $repo->validateLockedAnswers($submissionId, $answers, true),
+            'A student must be able to submit after answering the last question'
         );
     } finally {
         if ($db->inTransaction()) {

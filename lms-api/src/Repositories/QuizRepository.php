@@ -398,8 +398,9 @@ class QuizRepository
      * Server-side backstop for "Prevent Going Back".
      *
      * Rejects answers to questions that were never reached and answers that
-     * were changed after the student moved on. Returns null when the answers
-     * are acceptable.
+     * were changed after the student moved on. Blank captures left by older
+     * clients carry no usable answer, so they are skipped. Returns null when
+     * the answers are acceptable.
      */
     public function validateLockedAnswers(int $submissionId, array $answers, bool $preventBacktracking): ?string
     {
@@ -446,7 +447,10 @@ class QuizRepository
 
             $captured = $this->normalizeLockedAnswer($locks[$position]['answer']);
             if ($captured === '') {
-                return 'An answer is required before moving to the next question';
+                // Older clients captured blank answers before answer-before-next
+                // existed. There is no usable answer to compare against, so
+                // treat the position as unlocked instead of blocking submit.
+                continue;
             }
 
             $submitted = $this->normalizeLockedAnswer($answer['answer'] ?? '');
