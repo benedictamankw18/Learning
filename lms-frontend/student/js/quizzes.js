@@ -1060,7 +1060,7 @@
         throw new Error('Unable to create quiz attempt.');
       }
 
-      const qRes = await QuizAPI.getQuestions(quizIdOf(quiz));
+      const qRes = await QuizAPI.getSubmissionQuestions(submissionId);
       const qPayload = qRes?.data || qRes || {};
       const questions = Array.isArray(qPayload.questions) ? qPayload.questions : [];
 

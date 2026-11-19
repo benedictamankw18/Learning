@@ -31,6 +31,7 @@ mysql -u root -p -e "CREATE DATABASE IF NOT EXISTS lms CHARACTER SET utf8mb4 COL
 mysql -u root -p lms < db/init/01-lms.sql
 mysql -u root -p lms < db/init/02-insert.sql
 mysql -u root -p lms < db/init/03-refresh-tokens.sql
+mysql -u root -p lms < db/init/04-quiz-submission-questions.sql
 ```
 
 | File | Contents |
@@ -38,6 +39,7 @@ mysql -u root -p lms < db/init/03-refresh-tokens.sql
 | `01-lms.sql` | Schema (all tables, keys, indexes) |
 | `02-insert.sql` | Roles, permissions, platform super admin, demo institution data |
 | `03-refresh-tokens.sql` | Refresh-token storage used by login/refresh/rotation |
+| `04-quiz-submission-questions.sql` | Per-attempt question order for "Shuffle Questions" |
 
 > **The seeded super admin must not be used outside local development.** Its password hash is
 > committed to the repository, so the password is public knowledge. Provision a real account:

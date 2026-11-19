@@ -2304,6 +2304,38 @@ TRUNCATE TABLE `quiz_submission_answers`;
 
 
 --
+-- Table structure for table `quiz_submission_questions`
+--
+-- Per-attempt question order for "Shuffle Questions". Rows are written once
+-- when an attempt starts so a refresh or resume never reshuffles the quiz.
+--
+
+DROP TABLE IF EXISTS `quiz_submission_questions`;
+CREATE TABLE IF NOT EXISTS `quiz_submission_questions` (
+  `submission_id` int(11) NOT NULL,
+  `question_id` int(11) NOT NULL,
+  `position` int(11) NOT NULL,
+  `created_at` datetime DEFAULT current_timestamp(),
+  PRIMARY KEY (`submission_id`,`question_id`),
+  KEY `idx_qsq_submission_position` (`submission_id`,`position`),
+  KEY `idx_qsq_question_id` (`question_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--
+-- RELATIONSHIPS FOR TABLE `quiz_submission_questions`:
+--
+
+--
+-- Truncate table before insert `quiz_submission_questions`
+--
+
+TRUNCATE TABLE `quiz_submission_questions`;
+--
+-- Dumping data for table `quiz_submission_questions`
+--
+
+
+--
 -- Table structure for table `report_schedules`
 --
 

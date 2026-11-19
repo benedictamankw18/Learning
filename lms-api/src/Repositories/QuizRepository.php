@@ -219,6 +219,132 @@ class QuizRepository
     }
 
     /**
+     * Get the persisted question order for a submission.
+     *
+     * @return array<int,int>
+     */
+    public function getSubmissionQuestionOrder(int $submissionId): array
+    {
+        $stmt = $this->db->prepare("
+            SELECT question_id
+            FROM quiz_submission_questions
+            WHERE submission_id = :submission_id
+            ORDER BY position ASC, question_id ASC
+        ");
+
+        $stmt->execute(['submission_id' => $submissionId]);
+
+        return array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN));
+    }
+
+    /**
+     * Return the ordered question IDs for an attempt, creating and persisting
+     * the order on first use.
+     *
+     * The order is frozen per submission: a refresh, tab switch, or resume
+     * returns the same sequence, while a new attempt gets a new order.
+     *
+     * @return array<int,int>
+     */
+    public function ensureSubmissionQuestionOrder(int $submissionId, int $quizId, bool $shuffle): array
+    {
+        $existing = $this->getSubmissionQuestionOrder($submissionId);
+        if (!empty($existing)) {
+            return $existing;
+        }
+
+        $stmt = $this->db->prepare("
+            SELECT question_id
+            FROM quiz_questions
+            WHERE quiz_id = :quiz_id
+            ORDER BY order_index ASC, created_at ASC, question_id ASC
+        ");
+
+        $stmt->execute(['quiz_id' => $quizId]);
+        $questionIds = array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN));
+
+        if (empty($questionIds)) {
+            return [];
+        }
+
+        if ($shuffle) {
+            $questionIds = $this->shuffleQuestionOrder($questionIds);
+        }
+
+        $insert = $this->db->prepare("
+            INSERT IGNORE INTO quiz_submission_questions (
+                submission_id,
+                question_id,
+                position
+            ) VALUES (
+                :submission_id,
+                :question_id,
+                :position
+            )
+        ");
+
+        foreach ($questionIds as $position => $questionId) {
+            $insert->execute([
+                'submission_id' => $submissionId,
+                'question_id' => $questionId,
+                'position' => $position,
+            ]);
+        }
+
+        // Read back so two concurrent first requests converge on the order
+        // that was actually persisted rather than on their local shuffle.
+        $persisted = $this->getSubmissionQuestionOrder($submissionId);
+
+        return !empty($persisted) ? $persisted : $questionIds;
+    }
+
+    /**
+     * Fisher-Yates shuffle that never returns the authored order unchanged.
+     * A "shuffle" that leaves every question in place looks broken to
+     * students, so rotate once when that happens.
+     *
+     * @param array<int,int> $questionIds
+     * @return array<int,int>
+     */
+    private function shuffleQuestionOrder(array $questionIds): array
+    {
+        $authored = array_values($questionIds);
+        $shuffled = $authored;
+        shuffle($shuffled);
+
+        if (count($shuffled) > 1 && $shuffled === $authored) {
+            $shuffled[] = array_shift($shuffled);
+        }
+
+        return $shuffled;
+    }
+
+    /**
+     * Get the questions for an attempt in the student's persisted order.
+     */
+    public function getSubmissionQuestions(int $submissionId, int $quizId, bool $shuffle): array
+    {
+        $questionIds = $this->ensureSubmissionQuestionOrder($submissionId, $quizId, $shuffle);
+        if (empty($questionIds)) {
+            return [];
+        }
+
+        $questionsById = [];
+        foreach ($this->getQuestions($quizId) as $question) {
+            $questionsById[(int) $question['question_id']] = $question;
+        }
+
+        $ordered = [];
+        foreach ($questionIds as $questionId) {
+            if (isset($questionsById[$questionId])) {
+                $ordered[] = $questionsById[$questionId];
+            }
+        }
+
+        return $ordered;
+    }
+
+    /**
      * Get question with options
      */
     public function getQuestionWithOptions(int $questionId): ?array
@@ -614,7 +740,7 @@ class QuizRepository
      */
     public function getSubmissionAnswerDetails(int $submissionId): array
     {
-        $stmt = $this->db->prepare("\n            SELECT\n                q.question_id,\n                q.question_text,\n                q.correct_answer,\n                q.explanation,\n                q.order_index,\n                q.question_type,\n                q.points,\n                sa.answer AS student_answer,\n                sa.is_correct,\n                sa.points_earned\n            FROM quiz_submission_answers sa\n            INNER JOIN quiz_questions q ON q.question_id = sa.question_id\n            WHERE sa.submission_id = :submission_id\n            ORDER BY q.order_index ASC, q.question_id ASC\n        ");
+        $stmt = $this->db->prepare("\n            SELECT\n                q.question_id,\n                q.question_text,\n                q.correct_answer,\n                q.explanation,\n                q.order_index,\n                q.question_type,\n                q.points,\n                sa.answer AS student_answer,\n                sa.is_correct,\n                sa.points_earned\n            FROM quiz_submission_answers sa\n            INNER JOIN quiz_questions q ON q.question_id = sa.question_id\n            LEFT JOIN quiz_submission_questions sqq\n                ON sqq.submission_id = sa.submission_id\n               AND sqq.question_id = sa.question_id\n            WHERE sa.submission_id = :submission_id\n            ORDER BY COALESCE(sqq.position, q.order_index) ASC, q.question_id ASC\n        ");
 
         $stmt->execute(['submission_id' => $submissionId]);
         return $stmt->fetchAll(PDO::FETCH_ASSOC);

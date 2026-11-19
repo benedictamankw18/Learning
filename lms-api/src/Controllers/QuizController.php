@@ -709,6 +709,25 @@ class QuizController
     }
 
     /**
+     * Remove answer keys before questions are sent to a student.
+     */
+    private function stripAnswerKeys(array $questions): array
+    {
+        foreach ($questions as &$question) {
+            unset($question['correct_answer'], $question['explanation']);
+            if (isset($question['options']) && is_array($question['options'])) {
+                foreach ($question['options'] as &$option) {
+                    unset($option['is_correct']);
+                }
+                unset($option);
+            }
+        }
+        unset($question);
+
+        return $questions;
+    }
+
+    /**
      * Get questions for a quiz (teacher/admin or enrolled student)
      * GET /quizzes/{id}/questions
      */
@@ -754,20 +773,72 @@ class QuizController
 
         // Never expose answer keys to students while they are taking the quiz.
         if ($roleMiddleware->isStudent() && !$roleMiddleware->isAdmin()) {
-            foreach ($questions as &$question) {
-                unset($question['correct_answer'], $question['explanation']);
-                if (isset($question['options']) && is_array($question['options'])) {
-                    foreach ($question['options'] as &$option) {
-                        unset($option['is_correct']);
-                    }
-                    unset($option);
-                }
-            }
-            unset($question);
+            $questions = $this->stripAnswerKeys($questions);
         }
 
         Response::success([
             'questions' => $questions,
+            'count' => count($questions)
+        ]);
+    }
+
+    /**
+     * Get the questions for one of the student's own attempts, in the order
+     * that was generated when the attempt started.
+     * GET /quiz-submissions/{id}/questions
+     */
+    public function getSubmissionQuestions(array $user, int $id): void
+    {
+        $roleMiddleware = new RoleMiddleware($user);
+        if (!$roleMiddleware->requireRole(['student'])) {
+            return;
+        }
+
+        $studentId = $this->resolveStudentId($user);
+        if ($studentId === null) {
+            Response::forbidden('Student profile not found for this account');
+            return;
+        }
+
+        $submission = $this->repo->getSubmissionById($id);
+        if (!$submission) {
+            Response::error('Submission not found', 404);
+            return;
+        }
+
+        // Only the student who owns the attempt may read its questions.
+        if ((int) $submission['student_id'] !== $studentId
+            || (int) $submission['institution_id'] !== AccessControl::institutionId($user)) {
+            Response::error('Submission not found', 404);
+            return;
+        }
+
+        if (strtolower((string) ($submission['status'] ?? '')) !== 'in_progress') {
+            Response::error('Quiz already submitted', 400);
+            return;
+        }
+
+        $quiz = $this->repo->findById((int) $submission['quiz_id']);
+        if (!$quiz) {
+            Response::error('Quiz not found', 404);
+            return;
+        }
+
+        if (!$this->isQuizActive($quiz)
+            || !$this->courseRepo->isStudentEnrolledInCourse((int) $quiz['course_id'], $studentId)) {
+            Response::error('Quiz not found', 404);
+            return;
+        }
+
+        $questions = $this->repo->getSubmissionQuestions(
+            $id,
+            (int) $quiz['quiz_id'],
+            !empty($quiz['randomize_questions'])
+        );
+
+        Response::success([
+            'submission_id' => $id,
+            'questions' => $this->stripAnswerKeys($questions),
             'count' => count($questions)
         ]);
     }
@@ -1077,6 +1148,15 @@ class QuizController
         }
 
         $submissionId = $this->repo->startQuiz($id, $studentId);
+
+        // Freeze the question order for this attempt so a refresh, tab switch,
+        // or resume never reshuffles the quiz.
+        $this->repo->ensureSubmissionQuestionOrder(
+            $submissionId,
+            $id,
+            !empty($quiz['randomize_questions'])
+        );
+
         // Notify student that quiz is in progress
         $this->notifyQuizInProgress($id, $studentId);
 

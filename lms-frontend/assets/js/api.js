@@ -526,6 +526,7 @@ const QuizAPI = {
     start: (id) => API.post(API_ENDPOINTS.QUIZ_START(id), {}),
     submit: (submissionId, data) => API.post(API_ENDPOINTS.QUIZ_SUBMISSION_SUBMIT(submissionId), data),
     getSubmissionById: (submissionId) => API.get(API_ENDPOINTS.QUIZ_SUBMISSION_BY_ID(submissionId)),
+    getSubmissionQuestions: (submissionId) => API.get(API_ENDPOINTS.QUIZ_SUBMISSION_QUESTIONS(submissionId)),
     getMyAttempts: (id) => API.get(API_ENDPOINTS.QUIZ_MY_ATTEMPTS(id)),
     create: (data) => API.post(API_ENDPOINTS.QUIZZES, data),
     update: (id, data) => API.put(API_ENDPOINTS.QUIZ_BY_ID(id), data),

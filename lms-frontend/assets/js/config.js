@@ -220,6 +220,7 @@ const API_ENDPOINTS = {
     QUIZ_START: (id) => `/api/quizzes/${id}/start`,
     QUIZ_SUBMISSION_SUBMIT: (submissionId) => `/api/quiz-submissions/${submissionId}/submit`,
     QUIZ_SUBMISSION_BY_ID: (submissionId) => `/api/quiz-submissions/${submissionId}`,
+    QUIZ_SUBMISSION_QUESTIONS: (submissionId) => `/api/quiz-submissions/${submissionId}/questions`,
     QUIZ_MY_ATTEMPTS: (id) => `/api/quizzes/${id}/my-attempts`,
 
     // Assessment Categories

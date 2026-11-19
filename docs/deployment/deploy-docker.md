@@ -169,9 +169,15 @@ filename order:
 | `01-lms.sql` | Schema |
 | `02-insert.sql` | Roles, permissions, super admin, demo data |
 | `03-refresh-tokens.sql` | Refresh-token storage |
+| `04-quiz-submission-questions.sql` | Per-attempt question order for "Shuffle Questions" |
 
 Initialization **only runs on an empty volume**. If `db_data` already exists, the scripts are
-skipped.
+skipped. Apply new init files to an existing volume manually:
+
+```bash
+docker compose exec -T db sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE"' \
+  < db/init/04-quiz-submission-questions.sql
+```
 
 > Provision a real super admin instead of using the seeded demo account:
 
