@@ -689,15 +689,19 @@
   function renderQuestionNav() {
     if (!S.take || !E.questionNav) return;
 
+    const locked = Boolean(S.take.preventBacktracking);
+
     E.questionNav.innerHTML = S.take.questions.map((q, idx) => {
       const qid = String(q.question_id || idx);
       const answered = String(S.take.answers[qid] || '').trim() !== '';
       const classes = [
         'sq-qbtn',
         idx === S.take.currentIndex ? 'active' : '',
-        answered ? 'answered' : ''
+        answered ? 'answered' : '',
+        locked ? 'locked' : ''
       ].filter(Boolean).join(' ');
-      return '<button class="' + classes + '" data-q-index="' + idx + '">' + (idx + 1) + '</button>';
+      const disabled = locked ? ' disabled title="Question navigation is disabled for this quiz"' : '';
+      return '<button class="' + classes + '" data-q-index="' + idx + '"' + disabled + '>' + (idx + 1) + '</button>';
     }).join('');
   }
 
@@ -765,7 +769,7 @@
       }
     }
 
-    if (E.prevBtn) E.prevBtn.disabled = idx <= 0;
+    if (E.prevBtn) E.prevBtn.disabled = Boolean(S.take.preventBacktracking) || idx <= 0;
     if (E.nextBtn) E.nextBtn.disabled = idx >= total - 1;
   }
 
@@ -815,6 +819,7 @@
     if (!S.take || !S.take.quiz) return;
 
     const payload = {
+      submissionId: S.take.submissionId,
       answers: S.take.answers,
       currentIndex: S.take.currentIndex,
       timeLeftSeconds: S.take.timeLeftSeconds,
@@ -1076,10 +1081,17 @@
         answers: {},
         timeLeftSeconds: Math.max(60, toNumber(startPayload.duration_minutes, toNumber(quiz.duration_minutes, 1)) * 60),
         warned: false,
+        preventBacktracking: Number(qPayload.prevent_backtracking || 0) === 1,
       };
 
+      // A locked attempt must never resume from a draft written by another
+      // attempt: an old currentIndex could strand questions the student has
+      // not seen yet and can no longer reach.
       const oldDraft = restoreDraft(quizIdOf(quiz));
-      if (oldDraft) {
+      const draftIsUsable = oldDraft
+        && (!S.take.preventBacktracking
+          || toNumber(oldDraft.submissionId, 0) === Number(submissionId));
+      if (draftIsUsable) {
         S.take.answers = oldDraft.answers && typeof oldDraft.answers === 'object' ? oldDraft.answers : {};
         if (Number.isFinite(oldDraft.currentIndex)) {
           S.take.currentIndex = Math.max(0, Math.min(questions.length - 1, Number(oldDraft.currentIndex)));
@@ -1221,7 +1233,7 @@
 
     E.questionNav?.addEventListener('click', (event) => {
       const btn = event.target.closest('button[data-q-index]');
-      if (!btn || !S.take) return;
+      if (!btn || !S.take || S.take.preventBacktracking) return;
       const idx = toNumber(btn.dataset.qIndex, 0);
       if (idx < 0 || idx >= S.take.questions.length) return;
       S.take.currentIndex = idx;
@@ -1230,7 +1242,7 @@
     });
 
     E.prevBtn?.addEventListener('click', () => {
-      if (!S.take) return;
+      if (!S.take || S.take.preventBacktracking) return;
       if (S.take.currentIndex <= 0) return;
       S.take.currentIndex -= 1;
       renderQuestionNav();

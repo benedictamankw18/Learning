@@ -41,6 +41,15 @@ mysql -u root -p lms < db/init/04-quiz-submission-questions.sql
 | `03-refresh-tokens.sql` | Refresh-token storage used by login/refresh/rotation |
 | `04-quiz-submission-questions.sql` | Per-attempt question order for "Shuffle Questions" |
 
+Applying `01-lms.sql` to a database that already holds data will not add the newer columns.
+Run the standalone migrations instead, for example:
+
+```bash
+php lms-api/migrations/add_prevent_backtracking_to_quizzes.php
+```
+
+Each migration checks whether its change already exists and skips safely.
+
 > **The seeded super admin must not be used outside local development.** Its password hash is
 > committed to the repository, so the password is public knowledge. Provision a real account:
 

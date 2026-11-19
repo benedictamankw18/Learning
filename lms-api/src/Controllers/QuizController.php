@@ -531,6 +531,7 @@ class QuizController
             ->numeric('duration_minutes')
             ->numeric('max_attempts')
             ->numeric('randomize_questions')
+            ->numeric('prevent_backtracking')
             ->in('status', ['draft', 'active', 'archived'])
             ->in('quiz_type', ['graded', 'practice', 'survey'])
             ->in('show_results', ['instant', 'after_end', 'never']);
@@ -538,6 +539,10 @@ class QuizController
         if ($validator->fails()) {
             Response::validationError($validator->getErrors());
             return;
+        }
+
+        if (array_key_exists('prevent_backtracking', $data)) {
+            $data['prevent_backtracking'] = !empty($data['prevent_backtracking']) ? 1 : 0;
         }
 
         if (array_key_exists('start_date', $data)) {
@@ -628,6 +633,7 @@ class QuizController
             ->numeric('duration_minutes')
             ->numeric('max_attempts')
             ->numeric('randomize_questions')
+            ->numeric('prevent_backtracking')
             ->in('status', ['draft', 'active', 'archived'])
             ->in('quiz_type', ['graded', 'practice', 'survey'])
             ->in('show_results', ['instant', 'after_end', 'never']);
@@ -635,6 +641,10 @@ class QuizController
         if ($validator->fails()) {
             Response::validationError($validator->getErrors());
             return;
+        }
+
+        if (array_key_exists('prevent_backtracking', $data)) {
+            $data['prevent_backtracking'] = !empty($data['prevent_backtracking']) ? 1 : 0;
         }
 
         if (array_key_exists('start_date', $data)) {
@@ -839,7 +849,8 @@ class QuizController
         Response::success([
             'submission_id' => $id,
             'questions' => $this->stripAnswerKeys($questions),
-            'count' => count($questions)
+            'count' => count($questions),
+            'prevent_backtracking' => !empty($quiz['prevent_backtracking']) ? 1 : 0
         ]);
     }
 

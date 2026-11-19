@@ -50,6 +50,7 @@
             quizStatus: document.getElementById('quizStatus'),
             quizShowResults: document.getElementById('quizShowResults'),
             quizRandomizeQuestions: document.getElementById('quizRandomizeQuestions'),
+            quizPreventBacktracking: document.getElementById('quizPreventBacktracking'),
             quizIsActivated: document.getElementById('quizIsActivated'),
             quizStartDate: document.getElementById('quizStartDate'),
             quizEndDate: document.getElementById('quizEndDate'),
@@ -706,6 +707,7 @@
             elements.quizStatus.value = quiz.status || 'draft';
             elements.quizShowResults.value = quiz.show_results || 'after_end';
             elements.quizRandomizeQuestions.value = String(Number(quiz.randomize_questions || 0));
+            elements.quizPreventBacktracking.value = String(Number(quiz.prevent_backtracking || 0));
             elements.quizIsActivated.value = String(Number(quiz.is_activated || 0));
             elements.quizStartDate.value = toDateTimeLocal(quiz.start_date);
             elements.quizEndDate.value = toDateTimeLocal(quiz.end_date);
@@ -714,6 +716,7 @@
             elements.quizStatus.value = 'draft';
             elements.quizShowResults.value = 'after_end';
             elements.quizRandomizeQuestions.value = '0';
+            elements.quizPreventBacktracking.value = '0';
             elements.quizIsActivated.value = '0';
         }
 
@@ -768,6 +771,7 @@
             is_activated: Number(elements.quizIsActivated.value || 0),
             show_results: elements.quizShowResults.value || 'after_end',
             randomize_questions: Number(elements.quizRandomizeQuestions.value || 0),
+            prevent_backtracking: Number(elements.quizPreventBacktracking.value || 0),
             start_date: elements.quizStartDate.value ? new Date(elements.quizStartDate.value).toISOString() : null,
             end_date: elements.quizEndDate.value ? new Date(elements.quizEndDate.value).toISOString() : null
         };

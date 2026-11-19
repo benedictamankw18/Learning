@@ -2131,6 +2131,7 @@ CREATE TABLE IF NOT EXISTS `quizzes` (
   `quiz_type` varchar(20) DEFAULT 'graded',
   `is_activated` tinyint(1) DEFAULT 0,
   `randomize_questions` tinyint(1) DEFAULT 0,
+  `prevent_backtracking` tinyint(1) NOT NULL DEFAULT 0,
   `show_results` varchar(20) DEFAULT 'after_end',
   `start_date` datetime DEFAULT NULL,
   `end_date` datetime DEFAULT NULL,

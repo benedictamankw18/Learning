@@ -21,6 +21,7 @@ require_once __DIR__ . '/InstitutionIsolationTest.php';
 require_once __DIR__ . '/JwtConfigTest.php';
 require_once __DIR__ . '/RefreshTokenRotationTest.php';
 require_once __DIR__ . '/QuizShuffleTest.php';
+require_once __DIR__ . '/QuizBacktrackingTest.php';
 require_once __DIR__ . '/StaticChecksTest.php';
 
 exit(runTests());

@@ -93,6 +93,7 @@ class QuizRepository
                 is_activated,
                 show_results,
                 randomize_questions,
+                prevent_backtracking,
                 start_date,
                 end_date
             ) VALUES (
@@ -107,6 +108,7 @@ class QuizRepository
                 :is_activated,
                 :show_results,
                 :randomize_questions,
+                :prevent_backtracking,
                 :start_date,
                 :end_date
             )
@@ -124,6 +126,7 @@ class QuizRepository
             'is_activated' => $data['is_activated'] ?? 0,
             'show_results' => $data['show_results'] ?? 'after_end',
             'randomize_questions' => $data['randomize_questions'] ?? 0,
+            'prevent_backtracking' => $data['prevent_backtracking'] ?? 0,
             'start_date' => $data['start_date'] ?? null,
             'end_date' => $data['end_date'] ?? null
         ]);
@@ -150,6 +153,7 @@ class QuizRepository
             'is_activated',
             'show_results',
             'randomize_questions',
+            'prevent_backtracking',
             'start_date',
             'end_date'
         ];
