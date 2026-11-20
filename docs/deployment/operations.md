@@ -110,14 +110,18 @@ docker compose exec api php migrations/create_question_bank.php
 docker compose exec api php migrations/add_question_snapshot_to_quiz_submission_questions.php
 docker compose exec api php migrations/add_question_bank_metadata.php
 docker compose exec api php migrations/scope_question_bank_to_teachers.php
+docker compose exec api php migrations/add_course_section_to_questions.php
 ```
 
-The final script is a one-time ownership normalization: it assigns legacy ownerless questions
-to user 11 (`benedict.teacher`) when such rows exist, marks legacy rows private/draft, and adds
-the owner-scoped taxonomy keys. Rows that already have an owner are unchanged, and no API
-reassigns ownership afterwards. If there is nothing to reassign, user 11 does not have to exist.
-It is safe to run after a fresh init as well as an upgrade; back up first because it updates
-existing rows. See
+`scope_question_bank_to_teachers.php` is a one-time ownership normalization: it assigns legacy
+ownerless questions to user 11 (`benedict.teacher`) when such rows exist, marks legacy rows
+private/draft, and adds the owner-scoped taxonomy keys. Rows that already have an owner are
+unchanged, and no API reassigns ownership afterwards. If there is nothing to reassign, user 11
+does not have to exist. It is safe to run after a fresh init as well as an upgrade; back up first
+because it updates existing rows.
+
+`add_course_section_to_questions.php` adds the nullable lesson-plan Topic / Unit / Week link and
+its index without changing existing rows. See
 [`../assessment/question-bank.md`](../assessment/question-bank.md).
 
 ## 4. Legacy upload migration

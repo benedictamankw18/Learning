@@ -61,11 +61,14 @@ php lms-api/migrations/create_question_bank.php
 php lms-api/migrations/add_question_snapshot_to_quiz_submission_questions.php
 php lms-api/migrations/add_question_bank_metadata.php
 php lms-api/migrations/scope_question_bank_to_teachers.php
+php lms-api/migrations/add_course_section_to_questions.php
 ```
 
-The last migration is one-time: it assigns legacy ownerless questions to `benedict.teacher`
-(user 11), marks legacy rows private/draft, and adds `owner_user_id` to the taxonomy tables.
-Already-owned rows keep their owner; no API changes ownership later. See
+`scope_question_bank_to_teachers.php` is one-time: it assigns legacy ownerless questions to
+`benedict.teacher` (user 11), marks legacy rows private/draft, and adds `owner_user_id` to the
+taxonomy tables. Already-owned rows keep their owner; no API changes ownership later.
+
+The course-section migration adds nullable `questions.course_section_id` and its index. See
 [`../assessment/question-bank.md`](../assessment/question-bank.md).
 
 Each migration checks whether its change already exists and skips safely.

@@ -20,6 +20,7 @@
             root: document.getElementById('teacherQuizDetailsRoot'),
             subtitle: document.getElementById('quizDetailsSubtitle'),
             notice: document.getElementById('quizDetailsNotice'),
+            questionsBtn: document.getElementById('quizDetailsQuestionsBtn'),
             backBtn: document.getElementById('quizDetailsBackBtn'),
             infoGrid: document.getElementById('quizInfoGrid'),
             stats: document.getElementById('quizStats'),
@@ -98,31 +99,9 @@
     }
 
     function toAccessibleImageUrl(rawPath) {
-        const value = String(rawPath || '').trim();
-        if (!value) {
-            return '';
-        }
-
-        if (/^https?:\/\//i.test(value)) {
-            return value;
-        }
-
-        if (value.startsWith('/api/upload/')) {
-            return value;
-        }
-
-        if (value.startsWith('/uploads/')) {
-            const parts = value.split('/').filter(Boolean);
-            if (parts.length >= 3) {
-                return '/api/upload/' + parts[1] + '/' + parts.slice(2).join('/');
-            }
-        }
-
-        if (!value.includes('/')) {
-            return '/api/upload/quiz-questions/' + value;
-        }
-
-        return value;
+        return typeof resolveQuestionImageUrl === 'function'
+            ? resolveQuestionImageUrl(rawPath)
+            : String(rawPath || '').trim();
     }
 
     function toAbsoluteUrl(path) {
@@ -856,6 +835,15 @@
     }
 
     function bindEvents() {
+        if (elements.questionsBtn) {
+            elements.questionsBtn.addEventListener('click', () => {
+                if (!state.quizId) {
+                    return;
+                }
+                window.location.hash = `#quiz-questions?id=${state.quizId}`;
+            });
+        }
+
         if (elements.backBtn) {
             elements.backBtn.addEventListener('click', () => {
                 window.location.hash = '#quizzes';

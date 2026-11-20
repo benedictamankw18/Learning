@@ -40,6 +40,65 @@ function buildApiBaseCandidates(configuredValue) {
 const API_BASE_CANDIDATES = buildApiBaseCandidates(_env.API_BASE_URL);
 const API_BASE_URL = API_BASE_CANDIDATES[0] || '';
 
+function getApiAssetOrigin() {
+    const base = String(API_BASE_URL || '').trim().replace(/\/+$/, '');
+    return /\/api$/i.test(base) ? base.slice(0, -4) : base;
+}
+
+function getAssetInstitutionId() {
+    let user = null;
+    try {
+        user = typeof Auth !== 'undefined' && typeof Auth.getUser === 'function'
+            ? Auth.getUser()
+            : null;
+    } catch (_) {
+        user = null;
+    }
+    return Number(user && user.institution_id) || 0;
+}
+
+// Browser-facing question images use the public /uploads alias served by the API.
+// Stored rows may still contain the authenticated /api/upload form, so normalize
+// every known shape to an absolute public URL.
+function resolveQuestionImageUrl(rawPath) {
+    const value = String(rawPath == null ? '' : rawPath).trim();
+    if (!value) {
+        return '';
+    }
+    if (/^https?:\/\//i.test(value)) {
+        return value;
+    }
+
+    let path = /^uploads\//i.test(value) ? '/' + value : value;
+
+    if (path.startsWith('/api/upload/')) {
+        const parts = path.split('/').filter(Boolean).slice(2);
+        if (!parts.length) {
+            return '';
+        }
+        if (!/^\d+$/.test(parts[0])) {
+            const institutionId = getAssetInstitutionId();
+            if (!institutionId) {
+                return value;
+            }
+            parts.unshift(String(institutionId));
+        }
+        path = '/uploads/' + parts.join('/');
+    } else if (!path.startsWith('/uploads/') && !path.includes('/')) {
+        const institutionId = getAssetInstitutionId();
+        if (!institutionId) {
+            return value;
+        }
+        path = '/uploads/' + institutionId + '/quiz-questions/' + path;
+    }
+
+    const origin = getApiAssetOrigin();
+    if (!origin) {
+        return path;
+    }
+    return origin + (path.startsWith('/') ? path : '/' + path);
+}
+
 
 // API Endpoints
 const API_ENDPOINTS = {

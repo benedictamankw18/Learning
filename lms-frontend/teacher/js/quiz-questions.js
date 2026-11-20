@@ -128,29 +128,9 @@
   }
 
   function toAccessibleImageUrl(rawPath) {
-    const value = String(rawPath || "").trim();
-    if (!value) {
-      return "";
-    }
-
-    if (/^https?:\/\//i.test(value) || value.startsWith("/api/upload/")) {
-      return value;
-    }
-
-    if (value.startsWith("/uploads/")) {
-      const parts = value.split("/").filter(Boolean);
-      if (parts.length >= 3) {
-        const category = parts[1];
-        const filename = parts.slice(2).join("/");
-        return "/api/upload/" + category + "/" + filename;
-      }
-    }
-      // Legacy values may store only the raw filename in DB.
-      if (!value.includes("/")) {
-        return "/api/upload/quiz-questions/" + value;
-      }
-
-    return value;
+    return typeof resolveQuestionImageUrl === "function"
+      ? resolveQuestionImageUrl(rawPath)
+      : String(rawPath || "").trim();
   }
 
   function isMultipleChoice(type) {
@@ -461,8 +441,8 @@
 
     const uploadResponse = await FileAPI.upload(formData);
     const uploadData = uploadResponse && uploadResponse.data ? uploadResponse.data : uploadResponse;
-    const uploadedUrl = uploadData && (uploadData.api_url || uploadData.url)
-      ? String(uploadData.api_url || uploadData.url)
+    const uploadedUrl = uploadData && (uploadData.url || uploadData.api_url)
+      ? String(uploadData.url || uploadData.api_url)
       : "";
 
     if (!uploadedUrl) {

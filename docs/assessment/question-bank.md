@@ -17,11 +17,12 @@ them.
 
 | Table | Purpose |
 | --- | --- |
-| `questions` | The question content: text, image, type, default points, difficulty, explanation, answer key, institution, owner, archived flag, optional Section/subject/Topic references, and `current_version_id`. Legacy `visibility`, `approval_status`, review fields, and `forked_from_id` remain in the schema for compatibility only; the app does not use them. |
+| `questions` | The question content: text, image, type, default points, difficulty, explanation, answer key, institution, owner, archived flag, optional `course_section_id`, and `current_version_id`. Legacy `category_id`, `subject_id`, `topic_id`, `visibility`, `approval_status`, review fields, and `forked_from_id` remain in the schema for compatibility only; the app does not use them as workflow or UI organization. |
 | `question_bank_options` | Answer options for a bank question (`option_label`, `option_text`, `is_correct`). |
 | `quiz_question_links` | Which bank questions a quiz uses, in which order (`position`), and an optional `points_override`. |
-| `question_categories` | Teacher-owned Sections, optionally nested through `parent_id` (for example Unit → Week). |
-| `question_topics` | Teacher-owned Topics, optionally scoped to a subject (`subject_id = NULL` means a general topic). |
+| `course_sections` | Lesson-plan Topic / Unit / Week buckets, managed by Manage Topics / Units / Weeks and scoped to a course. This is the only organization shown in the bank editor and list. |
+| `question_categories` | Legacy teacher-owned Sections. Kept for existing data only. |
+| `question_topics` | Legacy teacher-owned Topics, optionally scoped to a subject. Kept for existing data only. |
 | `question_versions` | Immutable snapshots of answerable content (`content_json`) with a per-question `version_number`. |
 | `quiz_submission_questions` | Per-attempt order plus `question_snapshot` and `question_version_id`. |
 
@@ -61,19 +62,23 @@ submit-for-approval, approve, reject, sharing/visibility status, badge, fork, or
 review UI. New rows simply take the schema defaults (`private`, `draft`) and stay
 editable only by their owner.
 
-## Sections and topics
+## Topic / Unit / Week organization
 
-Organization is optional and teacher-owned. `question_categories` rows are
-Sections in the teacher's bank; `parent_id` can nest them (for example Unit →
-Week). `question_topics` rows are Topics and may be tied to one subject or left
-general (`subject_id = NULL`). Both tables are keyed by `institution_id` plus
-`owner_user_id`, and their names are unique per owner (per owner and subject for
-Topics), not per institution.
+Organization is optional and comes from Lesson Plans → Manage Topics / Units /
+Weeks. Those rows live in `course_sections` and are scoped to a course. The bank
+editor shows one aggregated **Topic / Unit / Week** select across the teacher's
+courses, with course-name prefixes so same-named buckets remain distinguishable.
 
-Only the owner can create, rename, reparent, or delete Sections and Topics. A
-Section or Topic used by one of that owner's questions cannot be deleted until
-it is detached. Questions may only reference the owner's own Section, subject,
-or Topic.
+Only the owner can create, rename, or delete those buckets through Lesson Plans.
+A bank question may only reference a section from one of the owner's own courses
+in the same institution. Cross-teacher or cross-institution section IDs are
+rejected on create and update. If a bucket is later deleted, the question keeps
+its `course_section_id` and the list displays a deleted-bucket fallback.
+
+`question_categories`, `subjects`, and `question_topics` are legacy taxonomy
+tables kept for compatibility with existing rows and CSV data. The bank UI no
+longer exposes Section, Unit / Week, or Topic from those tables, and new
+questions do not write them.
 
 ## Versions and attempt integrity
 
@@ -147,6 +152,7 @@ php lms-api/migrations/create_question_bank.php
 php lms-api/migrations/add_question_snapshot_to_quiz_submission_questions.php
 php lms-api/migrations/add_question_bank_metadata.php
 php lms-api/migrations/scope_question_bank_to_teachers.php
+php lms-api/migrations/add_course_section_to_questions.php
 ```
 
 The first copies legacy rows, links each quiz to its questions in the existing
@@ -166,8 +172,11 @@ The last migration is the one-time ownership normalization. It:
 
 If legacy rows need an owner, it refuses to reassign them when user 11 is
 missing; a database with no ownerless rows does not need that account. After this
-one-time step, no API changes ownership. All four migrations are additive and
-idempotent.
+one-time step, no API changes ownership.
+
+The course-section migration adds nullable `questions.course_section_id` and its
+index. Existing rows keep a `NULL` value and remain valid. It is additive and
+idempotent. All five migrations are additive and idempotent.
 
 Rollback is a database restore, or dropping the bank tables and the added
 columns after restoring the legacy code. There is no reverse migration because
@@ -199,7 +208,7 @@ as a request field.
 
 | Method | Path | Behaviour |
 | --- | --- | --- |
-| `GET` | `/api/question-bank/questions` | Own questions; filters `q`, `category_id`, `subject_id`, `topic_id`, `is_archived`; paginated with `page`/`limit`. |
+| `GET` | `/api/question-bank/questions` | Own questions; UI filters `q`, `course_section_id`, `include_archived`; legacy `category_id`/`subject_id`/`topic_id` filters remain for compatibility; paginated with `page`/`limit`. |
 | `POST` | `/api/question-bank/questions` | Create an owned question with version 1. |
 | `GET` | `/api/question-bank/questions/{id}` | Read one owned question (`404` otherwise). |
 | `PUT` | `/api/question-bank/questions/{id}` | Edit owned content/metadata; content changes create a version. |

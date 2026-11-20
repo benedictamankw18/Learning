@@ -61,12 +61,43 @@
     display: flex; justify-content: flex-end; gap: 0.5rem;
     padding: 1rem 1.25rem; border-top: 1px solid #e2e8f0;
   }
-  .qb-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
-  .qb-form-grid .full { grid-column: 1 / -1; }
-  .qb-option-row { display: flex; gap: 0.4rem; align-items: center; margin-bottom: 0.4rem; }
-  .qb-option-row input[type="text"] { flex: 1; border: 1px solid #cbd5e1; border-radius: 6px; padding: 0.4rem; }
-  .qb-option-row input[type="checkbox"] { width: auto; }
   .qb-text-preview { max-width: 320px; }
+
+  /* Inline question editor: mirrors quiz-questions.html Create / Edit Question. */
+  .tqq-btn-primary {
+    background: var(--primary); color: #fff; border: none;
+    padding: 0.5rem 1rem; border-radius: 8px; font-size: 0.85rem;
+    font-weight: 600; cursor: pointer; transition: all 0.2s;
+  }
+  .tqq-btn-primary:hover { background: var(--primary-light); }
+  .tqq-btn-secondary {
+    background: #f1f5f9; color: #0f172a; border: 1px solid #cbd5e1;
+    padding: 0.5rem 1rem; border-radius: 8px; font-size: 0.85rem;
+    font-weight: 600; cursor: pointer; transition: all 0.2s;
+  }
+  .tqq-btn-secondary:hover { background: #e2e8f0; }
+  .tqq-field { display: grid; gap: 0.3rem; }
+  .tqq-field label { font-size: 0.74rem; color: #475569; font-weight: 600; }
+  .tqq-field input,
+  .tqq-field select,
+  .tqq-field textarea {
+    border: 1px solid #dbe4ef; border-radius: 8px; padding: 0.5rem 0.65rem;
+    font-size: 0.84rem; background: #fff; color: #0f172a;
+  }
+  .tqq-field textarea { min-height: 90px; resize: vertical; }
+  .tqq-field input:focus,
+  .tqq-field select:focus,
+  .tqq-field textarea:focus {
+    outline: none; border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+  }
+  .tqq-form-grid { display: grid; gap: 0.75rem; }
+  .tqq-form-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.65rem; }
+  .tqq-options {
+    border: 1px solid #e2e8f0; border-radius: 10px; padding: 0.75rem;
+    background: #f8fafc; display: grid; gap: 0.6rem;
+  }
+  .tqq-options-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.6rem; }
+  .tqq-muted { font-size: 0.74rem; color: #64748b; }
   .qb-checkbox { display: flex; align-items: center; gap: 0.4rem; font-size: 0.8rem; color: #475569; }
   .qb-checkbox input { width: auto; }
   .qb-import-field { display: flex; flex-direction: column; gap: 0.4rem; }
@@ -90,8 +121,8 @@
   .qb-import-results-row.skipped { color: #92400e; }
   .qb-import-results-row.failed { color: #991b1b; }
   @media (max-width: 720px) {
-    .qb-form-grid { grid-template-columns: 1fr; }
-    .qb-form-grid .full { grid-column: 1; }
+    .tqq-form-row,
+    .tqq-options-grid { grid-template-columns: 1fr; }
   }
 </style>
 
@@ -110,16 +141,10 @@
             <input type="text" id="qbSearch" placeholder="Search question text..." />
           </div>
           <div class="qb-field">
-            <label for="qbFilterCategory">Section</label>
-            <select id="qbFilterCategory"><option value="">All sections</option></select>
-          </div>
-          <div class="qb-field">
-            <label for="qbFilterSubject">Unit / Week</label>
-            <select id="qbFilterSubject"><option value="">All units / weeks</option></select>
-          </div>
-          <div class="qb-field">
-            <label for="qbFilterTopic">Topic</label>
-            <select id="qbFilterTopic"><option value="">All topics</option></select>
+            <label for="qbFilterCourseSection">Topic / Unit / Week</label>
+            <select id="qbFilterCourseSection">
+              <option value="">All Topic / Unit / Week</option>
+            </select>
           </div>
           <label class="qb-checkbox" for="qbIncludeArchived">
             <input type="checkbox" id="qbIncludeArchived" />
@@ -145,13 +170,126 @@
         </div>
       </div>
 
+      <div class="card" id="teacherQuestionBankEditorCard" style="margin-bottom: 1rem;">
+        <div class="card-header">
+          <h3 id="qbEditorTitle" style="font-size: 0.95rem;">
+            <i class="fas fa-plus-circle"></i> New Question
+          </h3>
+        </div>
+        <div class="card-body">
+          <form id="qbQuestionForm" class="tqq-form-grid">
+            <input id="qbQuestionId" type="hidden" />
+
+            <div class="tqq-field">
+              <label for="qbQuestionText">Question Text</label>
+              <textarea id="qbQuestionText" required></textarea>
+            </div>
+
+            <div class="tqq-form-row">
+              <div class="tqq-field">
+                <label for="qbQuestionType">Question Type</label>
+                <select id="qbQuestionType" required>
+                  <option value="multiple_choice">Multiple Choice</option>
+                  <option value="true_false">True/False</option>
+                  <option value="short_answer">Short Answer</option>
+                  <option value="essay">Essay</option>
+                </select>
+              </div>
+              <div class="tqq-field">
+                <label for="qbPoints">Points</label>
+                <input id="qbPoints" type="number" min="1" value="1" />
+              </div>
+            </div>
+
+            <div class="tqq-form-row">
+              <div class="tqq-field">
+                <label for="qbDifficulty">Difficulty</label>
+                <select id="qbDifficulty">
+                  <option value="easy">Easy</option>
+                  <option value="medium" selected>Medium</option>
+                  <option value="hard">Hard</option>
+                </select>
+              </div>
+              <div class="tqq-field">
+                <label for="qbImageQuestion">Question Image (optional)</label>
+                <input id="qbImageQuestion" type="file" accept="image/*" />
+                <small id="qbImageQuestionCurrent" class="tqq-muted" style="display: none;"></small>
+              </div>
+            </div>
+
+            <div class="tqq-field">
+              <label for="qbCourseSection">Topic / Unit / Week</label>
+              <select id="qbCourseSection">
+                <option value="">None</option>
+              </select>
+              <small class="tqq-muted">
+                Managed in Lesson Plans → Manage Topics / Units / Weeks.
+              </small>
+            </div>
+
+            <div id="qbOptionsBlock" class="tqq-options">
+              <div class="tqq-field">
+                <label>Options (A, B, C, D)</label>
+                <div class="tqq-options-grid">
+                  <input id="qbOptionA" type="text" maxlength="500" placeholder="Option A" />
+                  <input id="qbOptionB" type="text" maxlength="500" placeholder="Option B" />
+                  <input id="qbOptionC" type="text" maxlength="500" placeholder="Option C" />
+                  <input id="qbOptionD" type="text" maxlength="500" placeholder="Option D" />
+                </div>
+              </div>
+              <div class="tqq-field">
+                <label for="qbCorrectOption">Correct Option</label>
+                <select id="qbCorrectOption">
+                  <option value="">Select correct option</option>
+                  <option value="A">A</option>
+                  <option value="B">B</option>
+                  <option value="C">C</option>
+                  <option value="D">D</option>
+                </select>
+              </div>
+            </div>
+
+            <div id="qbTrueFalseBlock" class="tqq-options" style="display: none;">
+              <div class="tqq-field">
+                <label>Correct Answer</label>
+                <div style="display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;">
+                  <label style="display: flex; align-items: center; gap: 0.4rem; margin: 0; font-weight: 500; color: #334155;">
+                    <input type="radio" name="qbQuestionTrueFalse" id="qbTrueValue" value="true" />
+                    True
+                  </label>
+                  <label style="display: flex; align-items: center; gap: 0.4rem; margin: 0; font-weight: 500; color: #334155;">
+                    <input type="radio" name="qbQuestionTrueFalse" id="qbFalseValue" value="false" />
+                    False
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            <div id="qbCorrectAnswerField" class="tqq-field" style="display: none;">
+              <label for="qbCorrectAnswer">Correct Answer (for non-multiple-choice)</label>
+              <input id="qbCorrectAnswer" type="text" maxlength="500" />
+            </div>
+
+            <div class="tqq-field">
+              <label for="qbExplanation">Explanation (optional)</label>
+              <textarea id="qbExplanation"></textarea>
+            </div>
+
+            <div style="display: flex; justify-content: flex-end; gap: 0.5rem;">
+              <button id="qbClearBtn" type="button" class="tqq-btn-secondary">Clear</button>
+              <button id="qbSubmitBtn" type="submit" class="tqq-btn-primary">Save Question</button>
+            </div>
+          </form>
+        </div>
+      </div>
+
       <div style="overflow-x: auto;">
         <table class="qb-table">
           <thead>
             <tr>
               <th style="width: 34%;">Question</th>
               <th>Type</th>
-              <th>Section / Topic</th>
+              <th>Topic / Unit / Week</th>
               <th>Pts</th>
               <th style="width: 22%;">Actions</th>
             </tr>
@@ -163,82 +301,6 @@
       </div>
 
       <div class="qb-pagination" id="qbPagination"></div>
-    </div>
-  </div>
-</div>
-
-<!-- Editor modal -->
-<div id="qbEditorModal" class="qb-modal-overlay">
-  <div class="qb-modal">
-    <div class="qb-modal-header">
-      <h3 id="qbEditorTitle">New Question</h3>
-      <button id="qbEditorClose" class="qb-btn qb-btn-secondary qb-btn-sm" type="button">&times;</button>
-    </div>
-    <div class="qb-modal-body">
-      <div class="qb-form-grid">
-        <div class="full">
-          <div class="qb-field">
-            <label for="qbQuestionText">Question text *</label>
-            <textarea id="qbQuestionText" rows="3"></textarea>
-          </div>
-        </div>
-        <div class="qb-field">
-          <label for="qbQuestionType">Question type *</label>
-          <select id="qbQuestionType">
-            <option value="multiple_choice">Multiple choice</option>
-            <option value="true_false">True / False</option>
-            <option value="short_answer">Short answer</option>
-            <option value="essay">Essay</option>
-          </select>
-        </div>
-        <div class="qb-field">
-          <label for="qbPoints">Points</label>
-          <input type="number" id="qbPoints" min="0" value="1" />
-        </div>
-        <div class="qb-field">
-          <label for="qbDifficulty">Difficulty</label>
-          <select id="qbDifficulty">
-            <option value="easy">Easy</option>
-            <option value="medium" selected>Medium</option>
-            <option value="hard">Hard</option>
-          </select>
-        </div>
-        <div class="qb-field">
-          <label for="qbCorrectAnswer">Correct answer</label>
-          <input type="text" id="qbCorrectAnswer" />
-        </div>
-        <div class="qb-field">
-          <label for="qbCategory">Section</label>
-          <select id="qbCategory"><option value="">None</option></select>
-        </div>
-        <div class="qb-field">
-          <label for="qbSubject">Unit / Week</label>
-          <select id="qbSubject"><option value="">None</option></select>
-        </div>
-        <div class="qb-field">
-          <label for="qbTopic">Topic</label>
-          <select id="qbTopic"><option value="">None</option></select>
-        </div>
-        <div class="qb-field full" id="qbImageField">
-          <label for="qbImageQuestion">Image URL (optional)</label>
-          <input type="text" id="qbImageQuestion" />
-        </div>
-        <div class="qb-field full">
-          <label for="qbExplanation">Explanation (optional)</label>
-          <textarea id="qbExplanation" rows="2"></textarea>
-        </div>
-        <div class="qb-field full" id="qbOptionsField">
-          <label>Answer options (mark the correct one)</label>
-          <div id="qbOptionsList"></div>
-          <button id="qbAddOptionBtn" class="qb-btn qb-btn-secondary qb-btn-sm" type="button">
-            <i class="fas fa-plus"></i> Add option
-          </button>
-        </div>
-      </div>
-    </div>
-    <div class="qb-modal-footer">
-      <button id="qbEditorCancel" class="qb-btn qb-btn-secondary" type="button">Cancel</button>
-      <button id="qbEditorSave" class="qb-btn qb-btn-primary" type="button">Save Question</button>
     </div>
   </div>
 </div>

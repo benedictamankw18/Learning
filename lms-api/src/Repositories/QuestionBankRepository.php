@@ -315,16 +315,23 @@ class QuestionBankRepository
         $sql = "
             SELECT q.*, c.name AS category_name, t.name AS topic_name,
                    s.subject_name, u.username AS owner_username,
+                   cs.section_name AS course_section_name,
+                   qsub.subject_name AS course_section_subject_name,
+                   qclass.class_name AS course_section_class_name,
                    (SELECT COUNT(*) FROM question_versions v WHERE v.question_id = q.question_id) AS version_count
             FROM questions q
             LEFT JOIN question_categories c ON c.category_id = q.category_id
             LEFT JOIN question_topics t ON t.topic_id = q.topic_id
             LEFT JOIN subjects s ON s.subject_id = q.subject_id
             LEFT JOIN users u ON u.user_id = q.owner_user_id
+            LEFT JOIN course_sections cs ON cs.course_sections_id = q.course_section_id
+            LEFT JOIN class_subjects qcourse ON qcourse.course_id = cs.course_id
+            LEFT JOIN subjects qsub ON qsub.subject_id = qcourse.subject_id
+            LEFT JOIN classes qclass ON qclass.class_id = qcourse.class_id
             WHERE {$ownerClause}
         ";
 
-        foreach (['category_id', 'subject_id', 'topic_id'] as $field) {
+        foreach (['category_id', 'subject_id', 'topic_id', 'course_section_id'] as $field) {
             if (isset($filters[$field]) && (int) $filters[$field] > 0) {
                 $sql .= " AND q.{$field} = :{$field}";
                 $params[$field] = (int) $filters[$field];
@@ -364,7 +371,7 @@ class QuestionBankRepository
         [$ownerClause, $params] = $this->ownerClause($actor);
         $sql = "SELECT COUNT(*) FROM questions q WHERE {$ownerClause}";
 
-        foreach (['category_id', 'subject_id', 'topic_id'] as $field) {
+        foreach (['category_id', 'subject_id', 'topic_id', 'course_section_id'] as $field) {
             if (isset($filters[$field]) && $filters[$field] !== '') {
                 $sql .= " AND q.{$field} = :{$field}";
                 $params[$field] = $filters[$field];
@@ -395,11 +402,18 @@ class QuestionBankRepository
         $params['question_id'] = $questionId;
 
         $stmt = $this->db->prepare("
-            SELECT q.*, c.name AS category_name, t.name AS topic_name, s.subject_name
+            SELECT q.*, c.name AS category_name, t.name AS topic_name, s.subject_name,
+                   cs.section_name AS course_section_name,
+                   qsub.subject_name AS course_section_subject_name,
+                   qclass.class_name AS course_section_class_name
             FROM questions q
             LEFT JOIN question_categories c ON c.category_id = q.category_id
             LEFT JOIN question_topics t ON t.topic_id = q.topic_id
             LEFT JOIN subjects s ON s.subject_id = q.subject_id
+            LEFT JOIN course_sections cs ON cs.course_sections_id = q.course_section_id
+            LEFT JOIN class_subjects qcourse ON qcourse.course_id = cs.course_id
+            LEFT JOIN subjects qsub ON qsub.subject_id = qcourse.subject_id
+            LEFT JOIN classes qclass ON qclass.class_id = qcourse.class_id
             WHERE {$ownerClause} AND q.question_id = :question_id
         ");
         $stmt->execute($params);
@@ -430,7 +444,7 @@ class QuestionBankRepository
         $fields = [];
         $params = ['question_id' => $questionId];
 
-        foreach (['category_id', 'subject_id', 'topic_id'] as $field) {
+        foreach (['category_id', 'subject_id', 'topic_id', 'course_section_id'] as $field) {
             if (array_key_exists($field, $data)) {
                 $fields[] = "{$field} = :{$field}";
                 $params[$field] = $data[$field] === null || $data[$field] === '' ? null : (int) $data[$field];
@@ -476,7 +490,7 @@ class QuestionBankRepository
 
         $sql = "SELECT q.* FROM questions q WHERE {$ownerClause}";
 
-        foreach (['category_id', 'subject_id', 'topic_id'] as $field) {
+        foreach (['category_id', 'subject_id', 'topic_id', 'course_section_id'] as $field) {
             if (isset($filters[$field]) && (int) $filters[$field] > 0) {
                 $sql .= " AND q.{$field} = :{$field}";
                 $params[$field] = (int) $filters[$field];
@@ -631,11 +645,11 @@ class QuestionBankRepository
             INSERT INTO questions (
                 institution_id, owner_user_id, question_text, image_question,
                 question_type, points, difficulty, explanation, correct_answer,
-                is_archived, category_id, subject_id, topic_id
+                is_archived, category_id, subject_id, topic_id, course_section_id
             ) VALUES (
                 :institution_id, :owner_user_id, :question_text, :image_question,
                 :question_type, :points, :difficulty, :explanation, :correct_answer,
-                0, :category_id, :subject_id, :topic_id
+                0, :category_id, :subject_id, :topic_id, :course_section_id
             )
         ");
         $stmt->execute([
@@ -651,6 +665,7 @@ class QuestionBankRepository
             'category_id' => $this->nullableInt($data['category_id'] ?? null),
             'subject_id' => $this->nullableInt($data['subject_id'] ?? null),
             'topic_id' => $this->nullableInt($data['topic_id'] ?? null),
+            'course_section_id' => $this->nullableInt($data['course_section_id'] ?? null),
         ]);
         $questionId = (int) $this->db->lastInsertId();
 

@@ -4,14 +4,13 @@
   const state = {
     questions: [],
     pagination: { current_page: 1, per_page: 25, total: 0, total_pages: 1 },
-    filters: { q: '', category_id: '', subject_id: '', topic_id: '', include_archived: false },
-    categories: [],
-    subjects: [],
-    topics: [],
+    filters: { q: '', course_section_id: '', include_archived: 0 },
+    teacherCourses: [],
+    courseSections: [],
     courses: [],
     editingId: null,
+    editingImageUrl: '',
     pendingQuizQuestionId: null,
-    bound: false,
   };
 
   let els = {};
@@ -24,44 +23,44 @@
     els = {
       root: document.getElementById('teacherQuestionBankRoot'),
       notice: document.getElementById('qbNotice'),
+
       search: document.getElementById('qbSearch'),
-      filterCategory: document.getElementById('qbFilterCategory'),
-      filterSubject: document.getElementById('qbFilterSubject'),
-      filterTopic: document.getElementById('qbFilterTopic'),
+      filterCourseSection: document.getElementById('qbFilterCourseSection'),
       includeArchived: document.getElementById('qbIncludeArchived'),
       refreshBtn: document.getElementById('qbRefreshBtn'),
       newBtn: document.getElementById('qbNewBtn'),
       importBtn: document.getElementById('qbImportBtn'),
       exportBtn: document.getElementById('qbExportBtn'),
       templateBtn: document.getElementById('qbTemplateBtn'),
-      importModal: document.getElementById('qbImportModal'),
-      importClose: document.getElementById('qbImportClose'),
-      importCancel: document.getElementById('qbImportCancelBtn'),
-      importConfirm: document.getElementById('qbImportConfirmBtn'),
-      importFile: document.getElementById('qbImportFile'),
-      importTemplateBtn: document.getElementById('qbImportTemplateBtn'),
-      importResults: document.getElementById('qbImportResults'),
-      listBody: document.getElementById('qbListBody'),
-      pagination: document.getElementById('qbPagination'),
 
-      editorModal: document.getElementById('qbEditorModal'),
+      editorCard: document.getElementById('teacherQuestionBankEditorCard'),
+      form: document.getElementById('qbQuestionForm'),
       editorTitle: document.getElementById('qbEditorTitle'),
-      editorClose: document.getElementById('qbEditorClose'),
-      editorCancel: document.getElementById('qbEditorCancel'),
-      editorSave: document.getElementById('qbEditorSave'),
+      questionId: document.getElementById('qbQuestionId'),
       questionText: document.getElementById('qbQuestionText'),
       questionType: document.getElementById('qbQuestionType'),
       points: document.getElementById('qbPoints'),
       difficulty: document.getElementById('qbDifficulty'),
-      correctAnswer: document.getElementById('qbCorrectAnswer'),
-      category: document.getElementById('qbCategory'),
-      subject: document.getElementById('qbSubject'),
-      topic: document.getElementById('qbTopic'),
       imageQuestion: document.getElementById('qbImageQuestion'),
+      imageQuestionCurrent: document.getElementById('qbImageQuestionCurrent'),
+      courseSection: document.getElementById('qbCourseSection'),
+      optionA: document.getElementById('qbOptionA'),
+      optionB: document.getElementById('qbOptionB'),
+      optionC: document.getElementById('qbOptionC'),
+      optionD: document.getElementById('qbOptionD'),
+      correctOption: document.getElementById('qbCorrectOption'),
+      trueValue: document.getElementById('qbTrueValue'),
+      falseValue: document.getElementById('qbFalseValue'),
+      correctAnswer: document.getElementById('qbCorrectAnswer'),
+      optionsBlock: document.getElementById('qbOptionsBlock'),
+      trueFalseBlock: document.getElementById('qbTrueFalseBlock'),
+      correctAnswerField: document.getElementById('qbCorrectAnswerField'),
       explanation: document.getElementById('qbExplanation'),
-      optionsField: document.getElementById('qbOptionsField'),
-      optionsList: document.getElementById('qbOptionsList'),
-      addOptionBtn: document.getElementById('qbAddOptionBtn'),
+      clearBtn: document.getElementById('qbClearBtn'),
+      submitBtn: document.getElementById('qbSubmitBtn'),
+
+      listBody: document.getElementById('qbListBody'),
+      pagination: document.getElementById('qbPagination'),
 
       quizModal: document.getElementById('qbQuizModal'),
       quizClose: document.getElementById('qbQuizClose'),
@@ -70,16 +69,21 @@
       quizCourse: document.getElementById('qbQuizCourse'),
       quizSelect: document.getElementById('qbQuizSelect'),
       quizHint: document.getElementById('qbQuizHint'),
+
+      importModal: document.getElementById('qbImportModal'),
+      importClose: document.getElementById('qbImportClose'),
+      importCancel: document.getElementById('qbImportCancelBtn'),
+      importConfirm: document.getElementById('qbImportConfirmBtn'),
+      importFile: document.getElementById('qbImportFile'),
+      importTemplateBtn: document.getElementById('qbImportTemplateBtn'),
+      importResults: document.getElementById('qbImportResults'),
     };
   }
 
   function escapeHtml(value) {
-    return String(value === null || value === undefined ? '' : value)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#039;');
+    const div = document.createElement('div');
+    div.textContent = String(value === null || value === undefined ? '' : value);
+    return div.innerHTML;
   }
 
   function setNotice(message, type) {
@@ -112,60 +116,142 @@
     return map[type] || type || '-';
   }
 
-  function openModal(modal) { if (modal) modal.classList.add('open'); }
-  function closeModal(modal) { if (modal) modal.classList.remove('open'); }
+  function openModal(modal) {
+    if (modal) modal.classList.add('open');
+  }
+
+  function closeModal(modal) {
+    if (modal) modal.classList.remove('open');
+  }
 
   function currentUser() {
     return (typeof Auth !== 'undefined' && Auth.getUser) ? Auth.getUser() : null;
   }
 
-  /* ---------------- Taxonomy + filters ---------------- */
+  function getTeacherUuid() {
+    const user = currentUser() || {};
+    return user.teacher_uuid || user.uuid || null;
+  }
 
-  async function loadTaxonomy() {
-    try {
-      const [catRes, subRes, topicRes] = await Promise.all([
-        QuestionBankAPI.getCategories(),
-        SubjectAPI.getAll({ limit: 500 }),
-        QuestionBankAPI.getTopics(),
-      ]);
-      state.categories = normalizeRows(catRes, 'categories');
-      state.subjects = normalizeRows(subRes, 'subjects');
-      state.topics = normalizeRows(topicRes, 'topics');
-    } catch (error) {
-      console.warn('Failed to load taxonomy:', error);
+  function getTeacherCoursesEndpoint(uuid) {
+    if (typeof API_ENDPOINTS !== 'undefined' && typeof API_ENDPOINTS.TEACHER_COURSES === 'function') {
+      return API_ENDPOINTS.TEACHER_COURSES(uuid);
+    }
+    return '/teachers/' + uuid + '/courses';
+  }
+
+  function toAccessibleImageUrl(rawPath) {
+    return typeof resolveQuestionImageUrl === 'function'
+      ? resolveQuestionImageUrl(rawPath)
+      : String(rawPath || '').trim();
+  }
+
+  function courseLabel(course) {
+    const subject = course.subject_name || course.course_name || course.name || 'Course';
+    const className = course.class_name || '';
+    return className ? subject + ' - ' + className : subject;
+  }
+
+  function scrollToEditor() {
+    if (!els.editorCard || !els.editorCard.scrollIntoView) return;
+    els.editorCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    if (els.questionText) {
+      window.setTimeout(function () { els.questionText.focus(); }, 150);
     }
   }
 
-  function fillSelect(select, rows, labelKey, valueKey, placeholder, selected) {
-    if (!select) return;
-    select.innerHTML = '<option value="">' + escapeHtml(placeholder) + '</option>';
-    rows.forEach(function (row) {
-      const option = document.createElement('option');
-      option.value = String(row[valueKey]);
-      option.textContent = String(row[labelKey]);
-      if (String(selected || '') === String(row[valueKey])) option.selected = true;
-      select.appendChild(option);
+  /* ---------------- Topic / Unit / Week options ---------------- */
+
+  async function loadSectionOptions() {
+    const uuid = getTeacherUuid();
+    let courses = [];
+
+    if (uuid) {
+      try {
+        const response = await TeacherAPI.getCourses(uuid, { limit: 500 });
+        courses = normalizeRows(response, 'courses');
+      } catch (error) {
+        console.warn('Failed to load teacher courses for bank organization:', error);
+      }
+    }
+
+    if (!courses.length && typeof DashboardAPI !== 'undefined' && DashboardAPI.getTeacherStats) {
+      try {
+        const response = await DashboardAPI.getTeacherStats();
+        courses = normalizeRows(response, 'courses');
+      } catch (error) {
+        console.warn('Failed to load course fallback for bank organization:', error);
+      }
+    }
+
+    state.teacherCourses = courses;
+    const sections = [];
+
+    await Promise.all(courses.map(async function (course) {
+      const courseId = Number(course.course_id || course.id || 0);
+      if (!courseId) return;
+
+      try {
+        const response = await API.get('/courses/' + courseId + '/sections');
+        const rows = normalizeRows(response, 'sections');
+        rows.forEach(function (section) {
+          if (!section || !section.course_sections_id) return;
+          const name = String(section.section_name || '').trim();
+          if (!name) return;
+          sections.push({
+            id: Number(section.course_sections_id),
+            name: name,
+            label: courseLabel(course) + ' – ' + name,
+          });
+        });
+      } catch (error) {
+        console.warn('Failed to load course sections for course ' + courseId + ':', error);
+      }
+    }));
+
+    const seen = new Set();
+    state.courseSections = sections.filter(function (section) {
+      if (seen.has(section.id)) return false;
+      seen.add(section.id);
+      return true;
+    }).sort(function (a, b) {
+      return a.label.localeCompare(b.label);
     });
   }
 
-  function populateSelects() {
-    fillSelect(els.filterCategory, state.categories, 'name', 'category_id', 'All sections', state.filters.category_id);
-    fillSelect(els.filterSubject, state.subjects, 'subject_name', 'subject_id', 'All units / weeks', state.filters.subject_id);
+  function fillSectionSelect(select, placeholder, selected) {
+    if (!select) return;
 
-    let topics = state.topics;
-    if (state.filters.subject_id) {
-      topics = topics.filter(function (t) {
-        return !t.subject_id || String(t.subject_id) === String(state.filters.subject_id);
-      });
+    select.innerHTML = '';
+    const first = document.createElement('option');
+    first.value = '';
+    first.textContent = placeholder;
+    select.appendChild(first);
+
+    if (!state.courseSections.length) {
+      const empty = document.createElement('option');
+      empty.value = '';
+      empty.textContent = 'No Topic / Unit / Week available';
+      empty.disabled = true;
+      select.appendChild(empty);
+      return;
     }
-    fillSelect(els.filterTopic, topics, 'name', 'topic_id', 'All topics', state.filters.topic_id);
 
-    fillSelect(els.category, state.categories, 'name', 'category_id', 'None', null);
-    fillSelect(els.subject, state.subjects, 'subject_name', 'subject_id', 'None', null);
-    const editTopics = state.filters.subject_id
-      ? state.topics.filter(function (t) { return !t.subject_id || String(t.subject_id) === String(state.filters.subject_id); })
-      : state.topics;
-    fillSelect(els.topic, editTopics, 'name', 'topic_id', 'None', null);
+    state.courseSections.forEach(function (section) {
+      const option = document.createElement('option');
+      option.value = String(section.id);
+      option.textContent = section.label;
+      select.appendChild(option);
+    });
+
+    if (selected) select.value = String(selected);
+  }
+
+  function populateSectionSelects() {
+    const editorSelected = els.courseSection ? els.courseSection.value : '';
+    const filterSelected = els.filterCourseSection ? els.filterCourseSection.value : '';
+    fillSectionSelect(els.courseSection, 'None', editorSelected);
+    fillSectionSelect(els.filterCourseSection, 'All Topic / Unit / Week', filterSelected);
   }
 
   /* ---------------- Question list ---------------- */
@@ -173,47 +259,37 @@
   function buildFilters() {
     return {
       q: state.filters.q,
-      category_id: state.filters.category_id,
-      subject_id: state.filters.subject_id,
-      topic_id: state.filters.topic_id,
+      course_section_id: state.filters.course_section_id,
       include_archived: state.filters.include_archived ? 1 : null,
       page: state.pagination.current_page,
       limit: state.pagination.per_page,
     };
   }
 
-  // Only the filters still exposed in the UI are sent to CSV export.
-  function buildExportFilters() {
-    return {
-      q: state.filters.q,
-      category_id: state.filters.category_id,
-      subject_id: state.filters.subject_id,
-      topic_id: state.filters.topic_id,
-      include_archived: state.filters.include_archived ? 1 : null,
-    };
-  }
-
   function cleanParams(params) {
     const out = {};
     Object.keys(params).forEach(function (key) {
-      const v = params[key];
-      if (v !== null && v !== undefined && v !== '') out[key] = v;
+      const value = params[key];
+      if (value !== null && value !== undefined && value !== '') out[key] = value;
     });
     return out;
   }
 
   async function loadQuestions() {
-    if (els.listBody) els.listBody.innerHTML = '<tr><td colspan="5" class="qb-empty">Loading questions...</td></tr>';
+    if (els.listBody) {
+      els.listBody.innerHTML = '<tr><td colspan="5" class="qb-empty">Loading questions...</td></tr>';
+    }
+
     try {
       const response = await QuestionBankAPI.getQuestions(cleanParams(buildFilters()));
-      const data = response.data || {};
+      const data = response && response.data ? response.data : {};
       state.questions = Array.isArray(data.questions) ? data.questions : [];
-      const p = data.pagination || {};
+      const pagination = data.pagination || {};
       state.pagination = {
-        current_page: Number(p.current_page) || 1,
-        per_page: Number(p.per_page) || 25,
-        total: Number(p.total) || 0,
-        total_pages: Number(p.total_pages) || 1,
+        current_page: Number(pagination.current_page) || 1,
+        per_page: Number(pagination.per_page) || 25,
+        total: Number(pagination.total) || 0,
+        total_pages: Number(pagination.total_pages) || 1,
       };
       renderTable();
       renderPagination();
@@ -226,6 +302,19 @@
     }
   }
 
+  function courseSectionDisplay(question) {
+    if (!question.course_section_id) return '-';
+    if (!question.course_section_name) return 'Deleted Topic / Unit / Week';
+
+    const course = [question.course_section_subject_name, question.course_section_class_name]
+      .filter(Boolean)
+      .join(' - ');
+
+    return course
+      ? course + ' – ' + question.course_section_name
+      : String(question.course_section_name);
+  }
+
   function renderTable() {
     if (!els.listBody) return;
     if (state.questions.length === 0) {
@@ -233,23 +322,22 @@
       return;
     }
 
-    els.listBody.innerHTML = state.questions.map(function (q) {
-      const text = String(q.question_text || '');
+    els.listBody.innerHTML = state.questions.map(function (question) {
+      const text = String(question.question_text || '');
       const preview = text.length > 150 ? text.substring(0, 150) + '…' : text;
-      const archived = Number(q.is_archived) === 1;
+      const archived = Number(question.is_archived) === 1;
 
-      const actions = [];
-      actions.push('<button class="qb-btn qb-btn-secondary qb-btn-sm" data-action="edit" data-id="' + q.question_id + '">Edit</button>');
-      actions.push('<button class="qb-btn qb-btn-secondary qb-btn-sm" data-action="archive" data-id="' + q.question_id + '" data-archived="' + archived + '">' + (archived ? 'Restore' : 'Archive') + '</button>');
-      actions.push('<button class="qb-btn qb-btn-primary qb-btn-sm" data-action="addtoquiz" data-id="' + q.question_id + '">Add to quiz</button>');
-
-      const categoryTopic = [q.category_name, q.topic_name].filter(Boolean).map(escapeHtml).join(' / ') || '-';
+      const actions = [
+        '<button class="qb-btn qb-btn-secondary qb-btn-sm" data-action="edit" data-id="' + question.question_id + '">Edit</button>',
+        '<button class="qb-btn qb-btn-secondary qb-btn-sm" data-action="archive" data-id="' + question.question_id + '" data-archived="' + archived + '">' + (archived ? 'Restore' : 'Archive') + '</button>',
+        '<button class="qb-btn qb-btn-primary qb-btn-sm" data-action="addtoquiz" data-id="' + question.question_id + '">Add to quiz</button>',
+      ];
 
       return '<tr>' +
         '<td class="qb-text-preview" title="' + escapeHtml(text) + '">' + escapeHtml(preview) + '</td>' +
-        '<td>' + escapeHtml(typeLabel(q.question_type)) + '</td>' +
-        '<td>' + categoryTopic + '</td>' +
-        '<td>' + escapeHtml(q.points) + '</td>' +
+        '<td>' + escapeHtml(typeLabel(question.question_type)) + '</td>' +
+        '<td>' + escapeHtml(courseSectionDisplay(question)) + '</td>' +
+        '<td>' + escapeHtml(question.points) + '</td>' +
         '<td><div class="qb-row-actions">' + actions.join('') + '</div></td>' +
         '</tr>';
     }).join('');
@@ -257,156 +345,267 @@
 
   function renderPagination() {
     if (!els.pagination) return;
-    const p = state.pagination;
-    if (!p.total_pages || p.total_pages <= 1) {
-      els.pagination.innerHTML = '<span style="font-size:0.8rem;color:#64748b;">' + p.total + ' question(s)</span>';
+    const pagination = state.pagination;
+    if (!pagination.total_pages || pagination.total_pages <= 1) {
+      els.pagination.innerHTML = '<span style="font-size:0.8rem;color:#64748b;">' + pagination.total + ' question(s)</span>';
       return;
     }
-    let html = '<span style="font-size:0.8rem;color:#64748b;margin-right:0.5rem;">' + p.total + ' question(s)</span>';
-    html += '<button data-page="' + (p.current_page - 1) + '"' + (p.current_page <= 1 ? ' disabled' : '') + '>‹</button>';
-    for (let i = 1; i <= p.total_pages; i++) {
-      html += '<button data-page="' + i + '"' + (i === p.current_page ? ' class="active"' : '') + '>' + i + '</button>';
+
+    let html = '<span style="font-size:0.8rem;color:#64748b;margin-right:0.5rem;">' + pagination.total + ' question(s)</span>';
+    html += '<button data-page="' + (pagination.current_page - 1) + '"' + (pagination.current_page <= 1 ? ' disabled' : '') + '>‹</button>';
+    for (let page = 1; page <= pagination.total_pages; page++) {
+      html += '<button data-page="' + page + '"' + (page === pagination.current_page ? ' class="active"' : '') + '>' + page + '</button>';
     }
-    html += '<button data-page="' + (p.current_page + 1) + '"' + (p.current_page >= p.total_pages ? ' disabled' : '') + '>›</button>';
+    html += '<button data-page="' + (pagination.current_page + 1) + '"' + (pagination.current_page >= pagination.total_pages ? ' disabled' : '') + '>›</button>';
     els.pagination.innerHTML = html;
   }
 
-  /* ---------------- Editor ---------------- */
+  /* ---------------- Inline editor ---------------- */
 
-  function resetEditor() {
+  function updateFormByType() {
+    const type = els.questionType ? els.questionType.value : 'multiple_choice';
+    const showMultipleChoice = type === 'multiple_choice';
+    const showTrueFalse = type === 'true_false';
+
+    if (els.optionsBlock) els.optionsBlock.style.display = showMultipleChoice ? 'grid' : 'none';
+    if (els.trueFalseBlock) els.trueFalseBlock.style.display = showTrueFalse ? 'grid' : 'none';
+    if (els.correctAnswerField) {
+      els.correctAnswerField.style.display = (!showMultipleChoice && !showTrueFalse) ? 'grid' : 'none';
+    }
+  }
+
+  function setCurrentImage(rawPath) {
+    const url = toAccessibleImageUrl(rawPath);
+    if (!els.imageQuestionCurrent) return url;
+    if (!url) {
+      els.imageQuestionCurrent.textContent = '';
+      els.imageQuestionCurrent.style.display = 'none';
+      return url;
+    }
+    els.imageQuestionCurrent.textContent = 'Current image: ' + url;
+    els.imageQuestionCurrent.style.display = 'block';
+    return url;
+  }
+
+  function resetEditor(options) {
+    const settings = options || {};
+    if (els.form) els.form.reset();
+
     state.editingId = null;
-    if (!els.editorTitle) return;
-    els.editorTitle.textContent = 'New Question';
-    els.questionText.value = '';
-    els.questionType.value = 'multiple_choice';
-    els.points.value = '1';
-    els.difficulty.value = 'medium';
-    els.correctAnswer.value = '';
-    els.category.value = '';
-    els.subject.value = '';
-    els.topic.value = '';
-    els.imageQuestion.value = '';
-    els.explanation.value = '';
-    els.optionsList.innerHTML = '';
-    addOptionRow('A', '', false);
-    addOptionRow('B', '', false);
-    toggleOptionsField();
-  }
-
-  function toggleOptionsField() {
-    if (els.optionsField) {
-      els.optionsField.style.display = els.questionType.value === 'multiple_choice' ? '' : 'none';
+    if (els.editorTitle) {
+      els.editorTitle.innerHTML = '<i class="fas fa-plus-circle"></i> New Question';
     }
-  }
-
-  function addOptionRow(label, text, isCorrect) {
-    if (!els.optionsList) return;
-    const row = document.createElement('div');
-    row.className = 'qb-option-row';
-    row.innerHTML =
-      '<input type="text" class="qb-opt-label" maxlength="5" value="' + escapeHtml(label || '') + '" style="width:48px;" />' +
-      '<input type="text" class="qb-opt-text" value="' + escapeHtml(text || '') + '" placeholder="Option text" />' +
-      '<label style="font-size:0.75rem;white-space:nowrap;"><input type="checkbox" class="qb-opt-correct"' + (isCorrect ? ' checked' : '') + ' /> Correct</label>' +
-      '<button class="qb-btn qb-btn-danger qb-btn-sm" type="button" data-action="remove-option">&times;</button>';
-    els.optionsList.appendChild(row);
-  }
-
-  async function loadOptionsIntoEditor(questionId) {
-    if (!els.optionsList) return;
-    els.optionsList.innerHTML = '';
-    try {
-      const response = await QuestionBankAPI.getQuestion(questionId);
-      const question = response && response.data ? response.data : (response || {});
-      const options = Array.isArray(question.options) ? question.options : [];
-      if (!options.length) {
-        addOptionRow('A', '', false);
-        addOptionRow('B', '', false);
-        return;
-      }
-      options.forEach(function (o) {
-        addOptionRow(o.option_label, o.option_text, Number(o.is_correct) === 1);
-      });
-    } catch (error) {
-      addOptionRow('A', '', false);
-      addOptionRow('B', '', false);
-    }
-  }
-
-  function fillEditor(q) {
-    state.editingId = q.question_id;
-    els.editorTitle.textContent = 'Edit Question #' + q.question_id;
-    els.questionText.value = q.question_text || '';
-    els.questionType.value = q.question_type || 'short_answer';
-    els.points.value = q.points != null ? q.points : 1;
-    els.difficulty.value = q.difficulty || 'medium';
-    els.correctAnswer.value = q.correct_answer || '';
-    els.category.value = q.category_id || '';
-    els.subject.value = q.subject_id || '';
-    els.topic.value = q.topic_id || '';
-    els.imageQuestion.value = q.image_question || '';
-    els.explanation.value = q.explanation || '';
-    toggleOptionsField();
-    openModal(els.editorModal);
-    if (els.questionType.value === 'multiple_choice') loadOptionsIntoEditor(q.question_id);
-  }
-
-  function collectOptions() {
-    const rows = els.optionsList ? els.optionsList.querySelectorAll('.qb-option-row') : [];
-    const options = [];
-    rows.forEach(function (row) {
-      const label = String(row.querySelector('.qb-opt-label').value || '').trim().toUpperCase();
-      const text = String(row.querySelector('.qb-opt-text').value || '').trim();
-      const isCorrect = row.querySelector('.qb-opt-correct').checked ? 1 : 0;
-      if (label && text) options.push({ label: label, text: text, is_correct: isCorrect });
+    if (els.questionId) els.questionId.value = '';
+    if (els.questionType) els.questionType.value = 'multiple_choice';
+    if (els.points) els.points.value = '1';
+    if (els.difficulty) els.difficulty.value = 'medium';
+    if (els.correctOption) els.correctOption.value = '';
+    if (els.correctAnswer) els.correctAnswer.value = '';
+    if (els.trueValue) els.trueValue.checked = false;
+    if (els.falseValue) els.falseValue.checked = false;
+    ['optionA', 'optionB', 'optionC', 'optionD'].forEach(function (key) {
+      if (els[key]) els[key].value = '';
     });
-    return options;
+    if (els.imageQuestion) els.imageQuestion.value = '';
+    if (els.submitBtn) els.submitBtn.textContent = 'Save Question';
+
+    state.editingImageUrl = setCurrentImage('') || '';
+    updateFormByType();
+    if (settings.scroll) scrollToEditor();
   }
 
-  function buildPayload() {
+  async function fillEditor(question) {
+    let full = question || {};
+    const questionId = Number(full.question_id || full.id || 0);
+
+    if (questionId) {
+      try {
+        const response = await QuestionBankAPI.getQuestion(questionId);
+        if (response && response.data) full = response.data;
+      } catch (error) {
+        // The list row still has enough data to open the editor.
+      }
+    }
+
+    state.editingId = questionId || null;
+    if (els.editorTitle) {
+      els.editorTitle.innerHTML = '<i class="fas fa-edit"></i> Edit Question #' + questionId;
+    }
+
+    if (els.questionId) els.questionId.value = String(questionId || '');
+    if (els.questionText) els.questionText.value = full.question_text || '';
+    if (els.questionType) els.questionType.value = full.question_type || 'multiple_choice';
+    if (els.points) els.points.value = full.points != null ? full.points : 1;
+    if (els.difficulty) els.difficulty.value = full.difficulty || 'medium';
+    if (els.explanation) els.explanation.value = full.explanation || '';
+    if (els.courseSection) {
+      els.courseSection.value = full.course_section_id ? String(full.course_section_id) : '';
+    }
+    if (els.imageQuestion) els.imageQuestion.value = '';
+    state.editingImageUrl = setCurrentImage(full.image_question) || '';
+
+    const optionsByLabel = {};
+    let correctFromOptions = '';
+    (full.options || []).forEach(function (option) {
+      const label = String(option.option_label || option.option_order || '').trim().toUpperCase();
+      if (!label) return;
+      optionsByLabel[label] = option.option_text || '';
+      if (Number(option.is_correct) === 1) correctFromOptions = label;
+    });
+
+    if (els.optionA) els.optionA.value = optionsByLabel.A || '';
+    if (els.optionB) els.optionB.value = optionsByLabel.B || '';
+    if (els.optionC) els.optionC.value = optionsByLabel.C || '';
+    if (els.optionD) els.optionD.value = optionsByLabel.D || '';
+
+    const type = els.questionType ? els.questionType.value : 'multiple_choice';
+    if (type === 'multiple_choice') {
+      if (els.correctOption) {
+        els.correctOption.value = String(full.correct_answer || correctFromOptions || '').trim().toUpperCase();
+      }
+    } else if (type === 'true_false') {
+      const answer = String(full.correct_answer || '').toLowerCase();
+      if (els.trueValue) els.trueValue.checked = answer === 'true';
+      if (els.falseValue) els.falseValue.checked = answer === 'false';
+    } else {
+      if (els.correctAnswer) els.correctAnswer.value = full.correct_answer || '';
+    }
+
+    if (els.submitBtn) els.submitBtn.textContent = 'Update Question';
+    updateFormByType();
+    scrollToEditor();
+  }
+
+  function collectPayloadFromForm() {
+    const type = els.questionType.value;
+    const isMultipleChoice = type === 'multiple_choice';
+
     const payload = {
       question_text: String(els.questionText.value || '').trim(),
-      question_type: els.questionType.value,
-      points: Number(els.points.value) || 0,
+      question_type: type,
+      points: Number.parseInt(els.points.value, 10) || 1,
       difficulty: els.difficulty.value,
-      correct_answer: String(els.correctAnswer.value || '').trim(),
-      explanation: String(els.explanation.value || '').trim(),
-      image_question: String(els.imageQuestion.value || '').trim() || null,
-      category_id: els.category.value || null,
-      subject_id: els.subject.value || null,
-      topic_id: els.topic.value || null,
+      explanation: String(els.explanation.value || '').trim() || null,
+      course_section_id: Number(els.courseSection && els.courseSection.value) || null,
     };
-    if (els.questionType.value === 'multiple_choice') {
-      payload.options = collectOptions();
+
+    if (!payload.question_text) {
+      throw new Error('Question text is required.');
     }
+
+    if (isMultipleChoice) {
+      const options = [
+        { option_order: 'A', option_text: String(els.optionA.value || '').trim() },
+        { option_order: 'B', option_text: String(els.optionB.value || '').trim() },
+        { option_order: 'C', option_text: String(els.optionC.value || '').trim() },
+        { option_order: 'D', option_text: String(els.optionD.value || '').trim() },
+      ].filter(function (option) { return option.option_text.length > 0; });
+
+      if (options.length < 2) {
+        throw new Error('Multiple choice questions require at least two options.');
+      }
+
+      const correctOption = String(els.correctOption.value || '').trim().toUpperCase();
+      if (!correctOption) {
+        throw new Error('Please select the correct option.');
+      }
+      if (!options.some(function (option) { return option.option_order === correctOption; })) {
+        throw new Error('Correct option must match an entered option.');
+      }
+
+      payload.correct_answer = correctOption;
+      payload.options = options.map(function (option) {
+        return {
+          label: option.option_order,
+          text: option.option_text,
+          is_correct: option.option_order === correctOption ? 1 : 0,
+        };
+      });
+    } else if (type === 'true_false') {
+      const answer = els.trueValue && els.trueValue.checked
+        ? 'true'
+        : (els.falseValue && els.falseValue.checked ? 'false' : '');
+      if (!answer) {
+        throw new Error('Please select True or False.');
+      }
+      payload.correct_answer = answer;
+      payload.options = [];
+    } else {
+      const answer = String(els.correctAnswer.value || '').trim();
+      if (!answer) {
+        throw new Error('Correct answer is required for this question type.');
+      }
+      payload.correct_answer = answer;
+      payload.options = [];
+    }
+
     return payload;
   }
 
-  async function saveQuestion() {
-    const payload = buildPayload();
-    if (!payload.question_text) {
-      setNotice('Question text is required.', 'error');
-      return;
+  async function uploadQuestionImage() {
+    if (!els.imageQuestion || !els.imageQuestion.files || !els.imageQuestion.files[0]) {
+      return null;
     }
-    if (payload.question_type === 'multiple_choice' && (!payload.options || payload.options.length < 2)) {
-      setNotice('Multiple choice questions require at least two options.', 'error');
-      return;
+
+    const file = els.imageQuestion.files[0];
+    if (file.size > 5 * 1024 * 1024) {
+      throw new Error('Question image must be under 5 MB.');
     }
+
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('category', 'quiz-questions');
+
+    const response = await FileAPI.upload(formData);
+    const data = response && response.data ? response.data : response;
+    const url = data && (data.url || data.api_url) ? String(data.url || data.api_url) : '';
+    if (!url) {
+      throw new Error('Image uploaded but URL was not returned.');
+    }
+
+    return url;
+  }
+
+  async function submitQuestion(event) {
+    if (event) event.preventDefault();
+
     try {
-      if (state.editingId) {
-        await QuestionBankAPI.updateQuestion(state.editingId, payload);
+      setNotice('');
+      const payload = collectPayloadFromForm();
+      const questionId = Number(els.questionId && els.questionId.value) || 0;
+      const uploadedUrl = await uploadQuestionImage();
+
+      if (uploadedUrl) {
+        payload.image_question = uploadedUrl;
+        payload.image_name = uploadedUrl;
+      } else if (questionId) {
+        const existingUrl = state.editingImageUrl || (function () {
+          const existing = state.questions.find(function (item) {
+            return Number(item.question_id) === questionId;
+          });
+          return existing ? toAccessibleImageUrl(existing.image_question) : '';
+        })();
+        if (existingUrl) {
+          payload.image_question = existingUrl;
+          payload.image_name = existingUrl;
+        }
+      }
+
+      if (questionId) {
+        await QuestionBankAPI.updateQuestion(questionId, payload);
         showToast('Question updated', 'success');
       } else {
         await QuestionBankAPI.createQuestion(payload);
         showToast('Question created', 'success');
       }
-      closeModal(els.editorModal);
+
+      resetEditor();
       await loadQuestions();
+      setNotice(questionId ? 'Question updated.' : 'Question created.', 'success');
     } catch (error) {
       setNotice(error.message || 'Unable to save question.', 'error');
     }
   }
-
-  /* ---------------- Actions ---------------- */
 
   async function archiveQuestion(id, archived) {
     try {
@@ -423,28 +622,34 @@
   async function loadPickerCourses() {
     if (!els.quizCourse) return;
     els.quizCourse.innerHTML = '<option value="">Loading courses...</option>';
-    els.quizSelect.innerHTML = '<option value="">Select a course first</option>';
+    if (els.quizSelect) els.quizSelect.innerHTML = '<option value="">Select a course first</option>';
+
     try {
-      const user = currentUser() || {};
+      const uuid = getTeacherUuid();
       let courses = [];
-      if (user.teacher_uuid) {
+      if (uuid) {
         try {
-          const res = await TeacherAPI.getCourses(user.teacher_uuid, { limit: 500 });
-          courses = normalizeRows(res, 'courses');
-        } catch (e) { /* fall through */ }
+          const response = await TeacherAPI.getCourses(uuid, { limit: 500 });
+          courses = normalizeRows(response, 'courses');
+        } catch (error) {
+          // Fall through to the dashboard course list.
+        }
       }
       if (!courses.length && typeof DashboardAPI !== 'undefined' && DashboardAPI.getTeacherStats) {
         try {
-          const res = await DashboardAPI.getTeacherStats();
-          courses = normalizeRows(res, 'courses');
-        } catch (e) { /* fall through */ }
+          const response = await DashboardAPI.getTeacherStats();
+          courses = normalizeRows(response, 'courses');
+        } catch (error) {
+          // Keep the empty list.
+        }
       }
+
       state.courses = courses;
       els.quizCourse.innerHTML = '<option value="">Select a course</option>';
-      state.courses.forEach(function (c) {
+      state.courses.forEach(function (course) {
         const option = document.createElement('option');
-        option.value = String(c.course_id || c.id);
-        option.textContent = String(c.course_name || c.title || c.name || ('Course #' + (c.course_id || c.id)));
+        option.value = String(course.course_id || course.id);
+        option.textContent = courseLabel(course);
         els.quizCourse.appendChild(option);
       });
     } catch (error) {
@@ -458,10 +663,11 @@
       els.quizSelect.innerHTML = '<option value="">Select a course first</option>';
       return;
     }
+
     els.quizSelect.innerHTML = '<option value="">Loading quizzes...</option>';
     try {
-      const res = await QuizAPI.getByCourse(courseId);
-      const quizzes = normalizeRows(res, 'quizzes');
+      const response = await QuizAPI.getByCourse(courseId);
+      const quizzes = normalizeRows(response, 'quizzes');
       els.quizSelect.innerHTML = '<option value="">Select a quiz</option>';
       quizzes.forEach(function (quiz) {
         const option = document.createElement('option');
@@ -476,9 +682,11 @@
 
   function openQuizModal(questionId) {
     state.pendingQuizQuestionId = questionId;
-    els.quizHint.textContent = 'This links question #' + questionId + ' into the quiz without copying it.';
-    els.quizCourse.value = '';
-    els.quizSelect.innerHTML = '<option value="">Select a course first</option>';
+    if (els.quizHint) {
+      els.quizHint.textContent = 'This links question #' + questionId + ' into the quiz without copying it.';
+    }
+    if (els.quizCourse) els.quizCourse.value = '';
+    if (els.quizSelect) els.quizSelect.innerHTML = '<option value="">Select a course first</option>';
     openModal(els.quizModal);
     loadPickerCourses();
   }
@@ -489,6 +697,7 @@
       setNotice('Select a quiz first.', 'error');
       return;
     }
+
     try {
       await QuizAPI.linkExistingQuestion(quizId, state.pendingQuizQuestionId);
       showToast('Question added to quiz', 'success');
@@ -499,7 +708,7 @@
     }
   }
 
-  /* ---------------- Events ---------------- */
+  /* ---------------- CSV import / export ---------------- */
 
   function renderCsvImportResults(data) {
     if (!els.importResults) return;
@@ -507,7 +716,7 @@
     const skipped = Number(data.skipped || 0);
     const failed = Number(data.failed || 0);
     const results = Array.isArray(data.results) ? data.results : [];
-    const summary = `Imported ${imported} · Skipped ${skipped} · Failed ${failed}`;
+    const summary = 'Imported ' + imported + ' · Skipped ' + skipped + ' · Failed ' + failed;
     const rows = results.map(function (result) {
       const status = String(result.status || 'failed').toLowerCase();
       const safeStatus = ['imported', 'skipped', 'failed'].includes(status) ? status : 'failed';
@@ -516,6 +725,7 @@
         + escapeHtml(safeStatus) + ' — ' + escapeHtml(result.message || '')
         + '</div>';
     }).join('');
+
     els.importResults.innerHTML = '<div style="font-weight:600; margin-bottom:0.35rem">'
       + escapeHtml(summary) + '</div>'
       + (rows || '<p class="qb-import-hint">No row details were returned.</p>');
@@ -588,12 +798,10 @@
 
       renderCsvImportResults(data);
       setNotice(
-        `Imported ${imported}, skipped ${skipped}, failed ${failed}.`,
+        'Imported ' + imported + ', skipped ' + skipped + ', failed ' + failed + '.',
         failed > 0 ? 'error' : 'success'
       );
-      if (imported > 0) {
-        await loadQuestions();
-      }
+      if (imported > 0) await loadQuestions();
       if (els.importFile) els.importFile.value = '';
     } catch (error) {
       renderCsvImportResults({
@@ -618,101 +826,87 @@
     els.importCancel?.addEventListener('click', function () { closeModal(els.importModal); });
     els.importConfirm?.addEventListener('click', importCsv);
     els.importFile?.addEventListener('change', syncCsvImportButton);
-    els.importModal?.addEventListener('click', function (e) {
-      if (e.target === els.importModal) closeModal(els.importModal);
+    els.importModal?.addEventListener('click', function (event) {
+      if (event.target === els.importModal) closeModal(els.importModal);
     });
   }
 
+  /* ---------------- Events ---------------- */
+
   function bindEvents() {
     els.refreshBtn?.addEventListener('click', function () { loadQuestions(); });
-    els.newBtn?.addEventListener('click', function () { resetEditor(); openModal(els.editorModal); });
+    els.newBtn?.addEventListener('click', function () { resetEditor({ scroll: true }); });
+    els.clearBtn?.addEventListener('click', function () { resetEditor({ scroll: false }); });
+    els.form?.addEventListener('submit', submitQuestion);
+    els.questionType?.addEventListener('change', updateFormByType);
 
     let searchTimer = null;
     els.search?.addEventListener('input', function () {
-      clearTimeout(searchTimer);
-      searchTimer = setTimeout(function () {
-        state.filters.q = els.search.value.trim();
+      window.clearTimeout(searchTimer);
+      searchTimer = window.setTimeout(function () {
+        state.filters.q = String(els.search.value || '').trim();
         state.pagination.current_page = 1;
         loadQuestions();
       }, 300);
     });
 
-    els.filterCategory?.addEventListener('change', function () {
-      state.filters.category_id = els.filterCategory.value;
+    els.filterCourseSection?.addEventListener('change', function () {
+      state.filters.course_section_id = els.filterCourseSection.value;
       state.pagination.current_page = 1;
       loadQuestions();
     });
-    els.filterSubject?.addEventListener('change', function () {
-      state.filters.subject_id = els.filterSubject.value;
-      state.filters.topic_id = '';
-      state.pagination.current_page = 1;
-      populateSelects();
-      loadQuestions();
-    });
-    els.filterTopic?.addEventListener('change', function () {
-      state.filters.topic_id = els.filterTopic.value;
-      state.pagination.current_page = 1;
-      loadQuestions();
-    });
+
     els.includeArchived?.addEventListener('change', function () {
-      state.filters.include_archived = !!els.includeArchived.checked;
+      state.filters.include_archived = els.includeArchived.checked ? 1 : 0;
       state.pagination.current_page = 1;
       loadQuestions();
     });
 
-    els.pagination?.addEventListener('click', function (e) {
-      const btn = e.target.closest('button[data-page]');
-      if (!btn || btn.disabled) return;
-      state.pagination.current_page = Number(btn.getAttribute('data-page')) || 1;
+    els.pagination?.addEventListener('click', function (event) {
+      const button = event.target.closest('button[data-page]');
+      if (!button || button.disabled) return;
+      state.pagination.current_page = Number(button.getAttribute('data-page')) || 1;
       loadQuestions();
     });
 
-    els.listBody?.addEventListener('click', function (e) {
-      const btn = e.target.closest('button[data-action]');
-      if (!btn) return;
-      const id = Number(btn.getAttribute('data-id'));
-      const action = btn.getAttribute('data-action');
-      const q = state.questions.find(function (item) { return Number(item.question_id) === id; });
-      if (action === 'edit' && q) fillEditor(q);
-      else if (action === 'archive') archiveQuestion(id, btn.getAttribute('data-archived'));
+    els.listBody?.addEventListener('click', function (event) {
+      const button = event.target.closest('button[data-action]');
+      if (!button) return;
+      const id = Number(button.getAttribute('data-id'));
+      const action = button.getAttribute('data-action');
+      const question = state.questions.find(function (item) {
+        return Number(item.question_id) === id;
+      });
+      if (action === 'edit' && question) fillEditor(question);
+      else if (action === 'archive') archiveQuestion(id, button.getAttribute('data-archived'));
       else if (action === 'addtoquiz') openQuizModal(id);
-    });
-
-    els.editorClose?.addEventListener('click', function () { closeModal(els.editorModal); });
-    els.editorCancel?.addEventListener('click', function () { closeModal(els.editorModal); });
-    els.editorSave?.addEventListener('click', saveQuestion);
-    els.questionType?.addEventListener('change', toggleOptionsField);
-    els.addOptionBtn?.addEventListener('click', function () { addOptionRow('', '', false); });
-    els.optionsList?.addEventListener('click', function (e) {
-      const btn = e.target.closest('button[data-action="remove-option"]');
-      if (btn) btn.closest('.qb-option-row')?.remove();
     });
 
     els.quizClose?.addEventListener('click', function () { closeModal(els.quizModal); });
     els.quizCancel?.addEventListener('click', function () { closeModal(els.quizModal); });
     els.quizConfirm?.addEventListener('click', confirmLink);
-    els.quizCourse?.addEventListener('change', function () { loadPickerQuizzes(els.quizCourse.value); });
-
-    document.querySelectorAll('.qb-modal-overlay').forEach(function (overlay) {
-      overlay.addEventListener('click', function (e) {
-        if (e.target === overlay) closeModal(overlay);
-      });
+    els.quizCourse?.addEventListener('change', function () {
+      loadPickerQuizzes(els.quizCourse.value);
+    });
+    els.quizModal?.addEventListener('click', function (event) {
+      if (event.target === els.quizModal) closeModal(els.quizModal);
     });
   }
 
   async function initPage() {
     if (!hasPageRoot()) return;
+
     cacheElements();
-    if (!state.bound) {
-      bindEvents();
-      state.bound = true;
-    }
-    // The import modal lives in the page fragment, so its nodes are recreated
-    // on every navigation. Bind its events each time against the fresh nodes.
-    bindCsvEvents();
+    state.filters = { q: '', course_section_id: '', include_archived: 0 };
     state.pagination.current_page = 1;
-    await loadTaxonomy();
-    populateSelects();
+    state.editingId = null;
+
+    bindEvents();
+    bindCsvEvents();
+
+    await loadSectionOptions();
+    populateSectionSelects();
+    resetEditor();
     await loadQuestions();
   }
 

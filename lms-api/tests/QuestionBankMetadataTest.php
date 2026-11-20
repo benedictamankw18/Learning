@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use App\Config\Database;
+use App\Repositories\CourseSectionRepository;
 use App\Repositories\QuestionBankRepository;
 use App\Repositories\QuizRepository;
 use App\Utils\QuestionCsv;
@@ -59,17 +60,18 @@ function qmetaInsertQuestion(PDO $db, array $fields = []): int
         'category_id' => null,
         'subject_id' => null,
         'topic_id' => null,
+        'course_section_id' => null,
     ], $fields);
 
     $stmt = $db->prepare("
         INSERT INTO questions (
             institution_id, owner_user_id, question_text, question_type, points,
             difficulty, explanation, correct_answer, visibility, approval_status,
-            is_archived, category_id, subject_id, topic_id
+            is_archived, category_id, subject_id, topic_id, course_section_id
         ) VALUES (
             :institution_id, :owner_user_id, :question_text, :question_type, :points,
             :difficulty, :explanation, :correct_answer, :visibility, :approval_status,
-            :is_archived, :category_id, :subject_id, :topic_id
+            :is_archived, :category_id, :subject_id, :topic_id, :course_section_id
         )
     ");
     $stmt->execute($fields);
@@ -126,6 +128,12 @@ test('Private-bank schema files and routes describe owner scope and versions', f
     foreach (['owner_user_id', 'current_version_id', 'visibility', 'approval_status', 'forked_from_id'] as $column) {
         assertContains("`{$column}`", $bank, "questions must define {$column}");
     }
+    assertContains('`course_section_id`', $bank, 'Bank questions can use lesson-plan Topic / Unit / Week buckets');
+    assertContains('idx_questions_course_section', $bank, 'Course-section filtering is indexed');
+
+    $sectionMigration = (string) file_get_contents($root . '/migrations/add_course_section_to_questions.php');
+    assertContains('course_section_id', $sectionMigration);
+    assertContains('idx_questions_course_section', $sectionMigration);
 
     $lms = (string) file_get_contents($projectRoot . '/db/init/01-lms.sql');
     $shuffle = (string) file_get_contents($projectRoot . '/db/init/04-quiz-submission-questions.sql');
@@ -216,6 +224,207 @@ test('Private-bank schema files and routes describe owner scope and versions', f
             testMethodBody($quizController, $method),
             "{$method} must be teacher-only"
         );
+    }
+});
+
+test('Course-section migration is additive and idempotent', function () {
+    $pdo = testDatabase();
+    if (!$pdo) {
+        skip('database is not reachable');
+    }
+
+    $name = 'lms_qsection_test_' . bin2hex(random_bytes(4));
+    try {
+        $pdo->exec("CREATE DATABASE `{$name}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
+    } catch (Throwable $e) {
+        skip('the configured database user cannot create a disposable database');
+    }
+
+    $host = (string) ($_ENV['DB_HOST'] ?? 'localhost');
+    $port = (string) ($_ENV['DB_PORT'] ?? '3306');
+    $user = (string) ($_ENV['DB_USER'] ?? 'root');
+    $pass = (string) ($_ENV['DB_PASS'] ?? '');
+
+    $temp = new PDO(
+        "mysql:host={$host};port={$port};dbname={$name};charset=utf8mb4",
+        $user,
+        $pass,
+        [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]
+    );
+
+    $migration = dirname(__DIR__) . '/migrations/add_course_section_to_questions.php';
+    $childEnv = [
+        'DB_HOST' => $host,
+        'DB_PORT' => $port,
+        'DB_NAME' => $name,
+        'DB_USER' => $user,
+        'DB_PASS' => $pass,
+    ];
+
+    try {
+        $temp->exec("
+            CREATE TABLE questions (
+                question_id int(11) NOT NULL AUTO_INCREMENT,
+                institution_id int(11) NOT NULL,
+                owner_user_id int(11) DEFAULT NULL,
+                question_text text NOT NULL,
+                question_type varchar(50) NOT NULL,
+                points int(11) NOT NULL DEFAULT 1,
+                is_archived tinyint(1) NOT NULL DEFAULT 0,
+                topic_id int(11) DEFAULT NULL,
+                updated_at datetime DEFAULT current_timestamp(),
+                PRIMARY KEY (question_id),
+                KEY idx_questions_topic (topic_id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        ");
+
+        $first = runPhpSnippet('require ' . var_export($migration, true) . ';', $childEnv);
+        assertSame(0, $first['code'], 'The course-section migration must succeed: ' . $first['stdout'] . $first['stderr']);
+        assertContains('added questions.course_section_id', $first['stdout']);
+        assertContains('added idx_questions_course_section', $first['stdout']);
+
+        $column = $temp->prepare("
+            SELECT COUNT(*) FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'questions'
+              AND COLUMN_NAME = 'course_section_id'
+        ");
+        $column->execute();
+        assertSame(1, (int) $column->fetchColumn(), 'Questions must gain the course-section column');
+
+        $index = $temp->prepare("
+            SELECT COUNT(*) FROM information_schema.STATISTICS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'questions'
+              AND INDEX_NAME = 'idx_questions_course_section'
+        ");
+        $index->execute();
+        assertSame(1, (int) $index->fetchColumn(), 'Course-section filtering must be indexed');
+
+        $second = runPhpSnippet('require ' . var_export($migration, true) . ';', $childEnv);
+        assertSame(0, $second['code'], 'The course-section migration must be re-runnable');
+        assertContains('questions.course_section_id already exists', $second['stdout']);
+        assertContains('idx_questions_course_section already exists', $second['stdout']);
+    } finally {
+        $temp = null;
+        try {
+            testDatabase()?->exec("DROP DATABASE IF EXISTS `{$name}`");
+        } catch (Throwable $e) {
+            // Cleanup failure is not worth failing the suite.
+        }
+    }
+});
+
+test('Bank questions only use lesson-plan sections owned by the acting teacher', function () {
+    $pdo = testDatabase();
+    if (!$pdo) {
+        skip('database is not reachable');
+    }
+    qmetaReady($pdo);
+
+    foreach (['course_sections', 'class_subjects', 'teachers', 'classes'] as $table) {
+        if (!testTableExists($pdo, $table)) {
+            skip('lesson-plan course-section tables are not available');
+        }
+    }
+
+    $column = $pdo->prepare("
+        SELECT COUNT(*) FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = 'questions'
+          AND COLUMN_NAME = 'course_section_id'
+    ");
+    $column->execute();
+    if ((int) $column->fetchColumn() !== 1) {
+        skip('run migrations/add_course_section_to_questions.php before testing course sections');
+    }
+
+    $sectionRow = $pdo->query("
+        SELECT cs.course_sections_id, cs.section_name, c.institution_id, t.user_id
+        FROM course_sections cs
+        INNER JOIN class_subjects c ON cs.course_id = c.course_id
+        INNER JOIN teachers t ON c.teacher_id = t.teacher_id
+        ORDER BY cs.course_sections_id ASC
+        LIMIT 1
+    ")->fetch(PDO::FETCH_ASSOC);
+    if (!$sectionRow) {
+        skip('no lesson-plan course sections are available');
+    }
+
+    $sectionId = (int) $sectionRow['course_sections_id'];
+    $sectionName = (string) $sectionRow['section_name'];
+    $ownerId = (int) $sectionRow['user_id'];
+    $institutionId = (int) $sectionRow['institution_id'];
+
+    $actor = [
+        'user_id' => $ownerId,
+        'role' => 'teacher',
+        'roles' => ['teacher'],
+        'institution_id' => $institutionId,
+    ];
+    $otherTeacher = $actor;
+    $otherTeacher['user_id'] = $ownerId + 100000;
+    $otherInstitution = $actor;
+    $otherInstitution['institution_id'] = $institutionId + 1000;
+
+    $sectionRepo = new CourseSectionRepository();
+    assertTrue(
+        is_array($sectionRepo->findOwnedForQuestionBank($sectionId, $institutionId, $ownerId)),
+        'A teacher may use a lesson-plan section from their own course'
+    );
+    assertSame(
+        null,
+        $sectionRepo->findOwnedForQuestionBank($sectionId, $institutionId, $otherTeacher['user_id']),
+        'Another teacher cannot use the section'
+    );
+    assertSame(
+        null,
+        $sectionRepo->findOwnedForQuestionBank($sectionId, $otherInstitution['institution_id'], $ownerId),
+        'A section from another institution cannot be used'
+    );
+
+    $db = Database::getInstance()->getConnection();
+    $repo = new QuestionBankRepository();
+    $marker = 'course-section ' . uniqid() . ' ';
+
+    $db->beginTransaction();
+    try {
+        $withSectionId = qmetaInsertQuestion($db, [
+            'institution_id' => $institutionId,
+            'owner_user_id' => $ownerId,
+            'question_text' => $marker . 'with-section',
+            'course_section_id' => $sectionId,
+        ]);
+        $withoutSectionId = qmetaInsertQuestion($db, [
+            'institution_id' => $institutionId,
+            'owner_user_id' => $ownerId,
+            'question_text' => $marker . 'legacy',
+        ]);
+
+        $filters = ['q' => $marker];
+        $sectionFilters = $filters;
+        $sectionFilters['course_section_id'] = $sectionId;
+
+        assertSame(1, $repo->countQuestions($sectionFilters, $actor), 'Course-section filter narrows the bank list');
+        $list = $repo->listQuestions($sectionFilters, $actor, 50, 0);
+        assertSame(1, count($list), 'List uses the same course-section filter');
+        assertSame($sectionName, (string) $list[0]['course_section_name'], 'List returns the section name');
+
+        $detail = $repo->findOwnedQuestion($withSectionId, $actor);
+        assertTrue(is_array($detail), 'The owner can read the linked question');
+        assertSame($sectionName, (string) $detail['course_section_name'], 'Detail returns the section name');
+        assertSame($sectionId, (int) $detail['course_section_id'], 'Detail returns the section id');
+
+        $legacy = $repo->findOwnedQuestion($withoutSectionId, $actor);
+        assertTrue(is_array($legacy), 'Legacy rows without a section remain readable');
+        assertTrue($legacy['course_section_id'] === null, 'Legacy rows keep a NULL course section');
+
+        $export = $repo->questionsForExport($sectionFilters, $actor);
+        assertSame(1, count($export), 'Export honours the course-section filter');
+    } finally {
+        if ($db->inTransaction()) {
+            $db->rollBack();
+        }
     }
 });
 

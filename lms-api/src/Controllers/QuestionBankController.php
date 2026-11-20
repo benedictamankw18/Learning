@@ -3,6 +3,7 @@
 namespace App\Controllers;
 
 use App\Middleware\RoleMiddleware;
+use App\Repositories\CourseSectionRepository;
 use App\Repositories\QuestionBankRepository;
 use App\Security\AccessControl;
 use App\Utils\QuestionCsv;
@@ -19,10 +20,12 @@ use App\Utils\Validator;
 class QuestionBankController
 {
     private QuestionBankRepository $repo;
+    private CourseSectionRepository $courseSections;
 
     public function __construct()
     {
         $this->repo = new QuestionBankRepository();
+        $this->courseSections = new CourseSectionRepository();
     }
 
     private function readBody(): array
@@ -70,6 +73,7 @@ class QuestionBankController
             'category_id' => $_GET['category_id'] ?? null,
             'subject_id' => $_GET['subject_id'] ?? null,
             'topic_id' => $_GET['topic_id'] ?? null,
+            'course_section_id' => $_GET['course_section_id'] ?? null,
             'is_archived' => isset($_GET['is_archived']) ? (int) $_GET['is_archived'] : null,
             'include_archived' => !empty($_GET['include_archived']),
             'q' => trim((string) ($_GET['q'] ?? '')),
@@ -120,6 +124,7 @@ class QuestionBankController
             ->numeric('category_id')
             ->numeric('subject_id')
             ->numeric('topic_id')
+            ->numeric('course_section_id')
             ->in('difficulty', ['easy', 'medium', 'hard'])
             ->max('image_question', 255)
             ->max('correct_answer', 500);
@@ -130,7 +135,7 @@ class QuestionBankController
         }
 
         if (!$this->metadataReferencesValid($data, $institutionId, $this->bankOwnerId($user))) {
-            Response::validationError(['metadata' => ['Section, subject or topic does not belong to your bank']]);
+            Response::validationError(['metadata' => ['Topic / Unit / Week or legacy bank metadata does not belong to your courses']]);
             return;
         }
 
@@ -164,6 +169,7 @@ class QuestionBankController
             ->numeric('category_id')
             ->numeric('subject_id')
             ->numeric('topic_id')
+            ->numeric('course_section_id')
             ->in('difficulty', ['easy', 'medium', 'hard'])
             ->max('image_question', 255)
             ->max('correct_answer', 500);
@@ -174,7 +180,7 @@ class QuestionBankController
 
         $institutionId = (int) $question['institution_id'];
         if (!$this->metadataReferencesValid($data, $institutionId, $this->bankOwnerId($user))) {
-            Response::validationError(['metadata' => ['Section, subject or topic does not belong to your bank']]);
+            Response::validationError(['metadata' => ['Topic / Unit / Week or legacy bank metadata does not belong to your courses']]);
             return;
         }
 
@@ -204,7 +210,10 @@ class QuestionBankController
                 $this->repo->updateContent($id, $data);
             }
 
-            $metadata = array_intersect_key($data, array_flip(['category_id', 'subject_id', 'topic_id']));
+            $metadata = array_intersect_key(
+                $data,
+                array_flip(['category_id', 'subject_id', 'topic_id', 'course_section_id'])
+            );
             if ($metadata !== []) {
                 $this->repo->updateMetadata($id, $metadata);
             }
@@ -352,6 +361,7 @@ class QuestionBankController
             'category_id' => $_GET['category_id'] ?? null,
             'subject_id' => $_GET['subject_id'] ?? null,
             'topic_id' => $_GET['topic_id'] ?? null,
+            'course_section_id' => $_GET['course_section_id'] ?? null,
             'is_archived' => isset($_GET['is_archived']) ? (int) $_GET['is_archived'] : null,
             'include_archived' => !empty($_GET['include_archived']),
             'q' => trim((string) ($_GET['q'] ?? '')),
@@ -729,6 +739,15 @@ class QuestionBankController
 
         if (!empty($data['subject_id'])
             && !$this->repo->subjectExists((int) $data['subject_id'], $institutionId)) {
+            return false;
+        }
+
+        if (!empty($data['course_section_id'])
+            && !$this->courseSections->findOwnedForQuestionBank(
+                (int) $data['course_section_id'],
+                $institutionId,
+                $ownerId
+            )) {
             return false;
         }
 

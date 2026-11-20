@@ -34,10 +34,12 @@ CREATE TABLE IF NOT EXISTS `questions` (
   `explanation` text DEFAULT NULL,
   `correct_answer` varchar(500) DEFAULT NULL,
   `is_archived` tinyint(1) NOT NULL DEFAULT 0,
-  -- Teacher-owned Section / subject / Topic organization.
+  -- Legacy Section / subject / Topic organization is retained for compatibility.
+  -- New bank UI organization uses lesson-plan course_sections.
   `category_id` int(11) DEFAULT NULL,
   `subject_id` int(11) DEFAULT NULL,
   `topic_id` int(11) DEFAULT NULL,
+  `course_section_id` int(11) DEFAULT NULL,
   -- Legacy approval columns are kept for compatibility only. The application
   -- treats every question as private and never starts an approval workflow.
   `visibility` enum('private','institution') NOT NULL DEFAULT 'private',
@@ -60,7 +62,8 @@ CREATE TABLE IF NOT EXISTS `questions` (
   KEY `idx_questions_approval` (`approval_status`),
   KEY `idx_questions_category` (`category_id`),
   KEY `idx_questions_subject` (`subject_id`),
-  KEY `idx_questions_topic` (`topic_id`)
+  KEY `idx_questions_topic` (`topic_id`),
+  KEY `idx_questions_course_section` (`course_section_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS `question_bank_options` (

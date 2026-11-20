@@ -55,6 +55,43 @@ class CourseSectionRepository
     }
 
     /**
+     * Find a lesson-plan bucket that the question-bank owner may use.
+     *
+     * QuestionBankRepository scopes questions by the teacher account's
+     * user_id, while course ownership is stored as teachers.teacher_id. Resolve
+     * that mapping here so a bank question cannot reference another teacher's
+     * course section.
+     */
+    public function findOwnedForQuestionBank(
+        int $sectionId,
+        int $institutionId,
+        int $ownerUserId
+    ): ?array {
+        if ($sectionId <= 0 || $institutionId <= 0 || $ownerUserId <= 0) {
+            return null;
+        }
+
+        $stmt = $this->db->prepare("
+            SELECT cs.*, c.institution_id, c.teacher_id
+            FROM course_sections cs
+            INNER JOIN class_subjects c ON cs.course_id = c.course_id
+            INNER JOIN teachers t ON c.teacher_id = t.teacher_id
+            WHERE cs.course_sections_id = :section_id
+              AND c.institution_id = :institution_id
+              AND t.user_id = :owner_user_id
+            LIMIT 1
+        ");
+        $stmt->execute([
+            'section_id' => $sectionId,
+            'institution_id' => $institutionId,
+            'owner_user_id' => $ownerUserId,
+        ]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        return $row ?: null;
+    }
+
+    /**
      * Create a new section
      */
     public function create(array $data): int
