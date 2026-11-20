@@ -8,7 +8,7 @@ use App\Repositories\QuizRepository;
 use App\Utils\QuestionCsv;
 
 /**
- * Phase 1C: question bank metadata, approval and immutable versions.
+ * Teacher-private question bank taxonomy, ownership and immutable versions.
  */
 
 function qmetaReady(PDO $pdo): void
@@ -21,7 +21,18 @@ function qmetaReady(PDO $pdo): void
 
     foreach (['question_categories', 'question_topics', 'question_versions'] as $table) {
         if (!testTableExists($pdo, $table)) {
-            skip('the Phase 1C metadata migration has not been applied');
+            skip('the question bank metadata migration has not been applied');
+        }
+    }
+}
+
+function qmetaTaxonomyReady(PDO $pdo): void
+{
+    qmetaReady($pdo);
+
+    foreach (['question_categories', 'question_topics'] as $table) {
+        if (!$pdo->query("SHOW COLUMNS FROM {$table} LIKE 'owner_user_id'")->fetch()) {
+            skip('run migrations/scope_question_bank_to_teachers.php before testing taxonomy');
         }
     }
 }
@@ -96,7 +107,7 @@ function qmetaInstitutionForQuiz(PDO $db, int $quizId): int
     return (int) $stmt->fetchColumn();
 }
 
-test('Phase 1C schema files and routes describe metadata, approval and versions', function () {
+test('Private-bank schema files and routes describe owner scope and versions', function () {
     $root = dirname(__DIR__);
     $projectRoot = dirname($root);
 
@@ -104,12 +115,15 @@ test('Phase 1C schema files and routes describe metadata, approval and versions'
     foreach (['question_categories', 'question_topics', 'question_versions'] as $table) {
         assertContains("CREATE TABLE IF NOT EXISTS `{$table}`", $metadata, "Metadata init must define {$table}");
     }
+    assertContains('`owner_user_id` int(11) NOT NULL', $metadata, 'Taxonomy is owned by one teacher');
+    assertContains('uq_qcategory_owner_name', $metadata, 'Section names are unique per owner');
+    assertContains('uq_qtopic_owner_scope', $metadata, 'Topic names are unique per owner');
     assertContains('`subject_id` int(11) DEFAULT NULL', $metadata, 'Topics are subject-scoped');
     assertContains('`content_json` json NOT NULL', $metadata, 'Versions store immutable content');
     assertContains('uq_question_version_number', $metadata, 'Version numbers are unique per question');
 
     $bank = (string) file_get_contents($projectRoot . '/db/init/05-question-bank.sql');
-    foreach (['visibility', 'approval_status', 'current_version_id', 'forked_from_id'] as $column) {
+    foreach (['owner_user_id', 'current_version_id', 'visibility', 'approval_status', 'forked_from_id'] as $column) {
         assertContains("`{$column}`", $bank, "questions must define {$column}");
     }
 
@@ -121,34 +135,91 @@ test('Phase 1C schema files and routes describe metadata, approval and versions'
     $migration = (string) file_get_contents($root . '/migrations/add_question_bank_metadata.php');
     assertContains('06-question-bank-metadata.sql', $migration, 'The migration uses the init file as source of truth');
     assertContains('current_version_id', $migration);
-    assertContains("visibility = 'institution'", $migration, 'Legacy rows are grandfathered as shared');
+    assertContains("visibility = 'private'", $migration, 'Legacy rows do not become shared');
+    assertContains("approval_status = 'draft'", $migration, 'Legacy rows do not enter an approval workflow');
+
+    $scopeMigration = (string) file_get_contents($root . '/migrations/scope_question_bank_to_teachers.php');
+    assertContains('fallbackOwnerId = 11', $scopeMigration, 'Legacy ownerless rows go to the designated teacher');
+    assertContains('scope question bank to teacher-private ownership', $scopeMigration);
 
     $routes = (string) file_get_contents($root . '/src/Routes/api.php');
     foreach ([
         'GET /question-bank/questions',
-        'POST /question-bank/questions/{id}/submit-for-approval',
-        'POST /question-bank/questions/{id}/approve',
-        'POST /question-bank/questions/{id}/reject',
-        'POST /question-bank/questions/{id}/fork',
+        'POST /question-bank/questions',
+        'POST /question-bank/questions/import',
+        'GET /question-bank/questions/export',
+        'GET /question-bank/questions/import-template',
+        'GET /question-bank/questions/{id}',
+        'PUT /question-bank/questions/{id}',
+        'POST /question-bank/questions/{id}/archive',
         'GET /question-bank/questions/{id}/versions',
         'GET /question-bank/categories',
         'GET /question-bank/topics',
     ] as $route) {
         assertContains($route, $routes, "Route must exist: {$route}");
     }
+    foreach ([
+        'POST /question-bank/questions/{id}/submit-for-approval',
+        'POST /question-bank/questions/{id}/approve',
+        'POST /question-bank/questions/{id}/reject',
+        'POST /question-bank/questions/{id}/fork',
+    ] as $route) {
+        assertFalse(str_contains($routes, $route), "Removed route must be absent: {$route}");
+    }
 
     $repo = (string) file_get_contents($root . '/src/Repositories/QuizRepository.php');
     assertContains('getServedQuestionContent', $repo, 'Attempts must resolve pinned version content');
     assertContains('question_version_id', $repo);
     assertContains('createVersion', $repo);
+    assertContains('function getQuestions(int $quizId, ?int $ownerUserId = null)', $repo);
+    assertContains('function addQuestion(array $data)', $repo);
+    assertContains('function linkExistingQuestion(int $quizId, int $questionId, int $ownerUserId)', $repo);
+    assertContains('function importQuestions(int $quizId, array $rows, int $ownerUserId)', $repo);
 
     $bankRepo = (string) file_get_contents($root . '/src/Repositories/QuestionBankRepository.php');
-    foreach (['visibilityClause', 'createVersion', 'fork', 'submitForApproval', 'approve', 'reject'] as $method) {
+    foreach (['ownerClause', 'findOwnedQuestion', 'createVersion'] as $method) {
         assertContains('function ' . $method, $bankRepo, "Bank repository must implement {$method}");
+    }
+    assertContains('function listCategories(int $institutionId, int $ownerId)', $bankRepo);
+    assertContains('function listTopics(int $institutionId, ?int $subjectId, int $ownerId)', $bankRepo);
+    assertContains('function setArchived(int $questionId, bool $archived, array $actor)', $bankRepo);
+    foreach (['visibilityClause', 'findVisibleQuestion', 'fork', 'submitForApproval', 'approve', 'reject'] as $method) {
+        assertFalse(str_contains($bankRepo, 'function ' . $method), "Removed bank method must be absent: {$method}");
+    }
+
+    $bankController = (string) file_get_contents($root . '/src/Controllers/QuestionBankController.php');
+    assertContains('function requireBankTeacher', $bankController);
+    assertContains("requireRole(['teacher'])", $bankController);
+
+    $quizController = (string) file_get_contents($root . '/src/Controllers/QuizController.php');
+    $authoringMethods = [
+        'addQuestion',
+        'linkExistingQuestion',
+        'importQuestions',
+        'exportQuestions',
+        'importTemplate',
+        'updateQuestion',
+        'deleteQuestion',
+        'findManageableQuiz',
+    ];
+    foreach ($authoringMethods as $method) {
+        $body = testMethodBody($quizController, $method);
+        assertNotSame('', $body, "Quiz authoring method {$method} must exist");
+        assertFalse(
+            str_contains($body, "requireRole(['admin'") || str_contains($body, "'super_admin'"),
+            "Admins must not author quiz questions in {$method}"
+        );
+    }
+    foreach (['addQuestion', 'linkExistingQuestion', 'findManageableQuiz', 'updateQuestion', 'deleteQuestion'] as $method) {
+        assertContains(
+            "requireRole(['teacher'])",
+            testMethodBody($quizController, $method),
+            "{$method} must be teacher-only"
+        );
     }
 });
 
-test('Phase 1C metadata migration is additive, grandfathers legacy rows and is idempotent', function () {
+test('Private-bank metadata migration is additive, privatizes legacy rows and is idempotent', function () {
     $pdo = testDatabase();
     if (!$pdo) {
         skip('database is not reachable');
@@ -248,8 +319,8 @@ test('Phase 1C metadata migration is additive, grandfathers legacy rows and is i
 
         $rows = $temp->query('SELECT question_id, visibility, approval_status, current_version_id FROM questions ORDER BY question_id')->fetchAll();
         assertSame(2, count($rows));
-        assertSame('institution', $rows[0]['visibility'], 'Legacy rows become institution-visible');
-        assertSame('approved', $rows[0]['approval_status'], 'Legacy rows are grandfathered as approved');
+        assertSame('private', $rows[0]['visibility'], 'Legacy rows stay private');
+        assertSame('draft', $rows[0]['approval_status'], 'Legacy rows do not enter an approval workflow');
         assertNotNull($rows[0]['current_version_id'], 'Legacy rows point at version 1');
         assertTrue((int) $rows[0]['current_version_id'] > 0);
 
@@ -280,7 +351,7 @@ test('Phase 1C metadata migration is additive, grandfathers legacy rows and is i
     }
 });
 
-test('Teachers see only their own and approved institution questions', function () {
+test('Teachers see only questions they own in their own institution', function () {
     $pdo = testDatabase();
     if (!$pdo) {
         skip('database is not reachable');
@@ -289,32 +360,26 @@ test('Teachers see only their own and approved institution questions', function 
 
     $db = Database::getInstance()->getConnection();
     $repo = new QuestionBankRepository();
-    $marker = 'visible ' . uniqid() . ' ';
+    $marker = 'owned ' . uniqid() . ' ';
 
     $db->beginTransaction();
     try {
-        $rows = [
-            ['owner_user_id' => 11, 'visibility' => 'private', 'approval_status' => 'draft'],
-            ['owner_user_id' => 11, 'visibility' => 'institution', 'approval_status' => 'approved'],
-            ['owner_user_id' => 99, 'visibility' => 'private', 'approval_status' => 'draft'],
-            ['owner_user_id' => 99, 'visibility' => 'private', 'approval_status' => 'pending'],
-            ['owner_user_id' => 99, 'visibility' => 'institution', 'approval_status' => 'approved'],
-            ['owner_user_id' => 99, 'visibility' => 'private', 'approval_status' => 'rejected'],
-            ['owner_user_id' => null, 'visibility' => 'private', 'approval_status' => 'draft'],
-            ['owner_user_id' => null, 'visibility' => 'institution', 'approval_status' => 'approved'],
-        ];
         $ids = [];
-        foreach ($rows as $i => $row) {
-            $ids[$i] = qmetaInsertQuestion($db, $row + [
+        foreach ([11, 11, 99, 99, 99, 99] as $i => $ownerId) {
+            $ids[$i] = qmetaInsertQuestion($db, [
                 'institution_id' => 1,
+                'owner_user_id' => $ownerId,
                 'question_text' => $marker . $i,
             ]);
         }
+        $ownerlessId = qmetaInsertQuestion($db, [
+            'institution_id' => 1,
+            'owner_user_id' => null,
+            'question_text' => $marker . 'ownerless',
+        ]);
         $foreignId = qmetaInsertQuestion($db, [
             'institution_id' => 2,
-            'owner_user_id' => null,
-            'visibility' => 'institution',
-            'approval_status' => 'approved',
+            'owner_user_id' => 11,
             'question_text' => $marker . 'foreign',
         ]);
 
@@ -325,19 +390,23 @@ test('Teachers see only their own and approved institution questions', function 
         $super = ['user_id' => 1, 'role' => 'super_admin', 'roles' => ['super_admin'], 'is_super_admin' => 1, 'institution_id' => 0];
 
         $filters = ['q' => $marker];
-        assertSame(4, $repo->countQuestions($filters, $teacher), 'Teacher sees own rows plus approved institution rows');
-        assertSame(6, $repo->countQuestions($filters, $otherTeacher), 'The other teacher sees its own rows plus the approved set');
-        assertSame(8, $repo->countQuestions($filters, $admin), 'Admin sees every question in the institution');
-        assertSame(1, $repo->countQuestions($filters, $otherAdmin), 'Admin cannot see another institution');
-        assertSame(9, $repo->countQuestions($filters, $super), 'Super admin sees all institutions');
+        assertSame(2, $repo->countQuestions($filters, $teacher), 'A teacher sees only their own bank rows');
+        assertSame(4, $repo->countQuestions($filters, $otherTeacher), 'Another teacher sees only their own rows');
+        assertSame(0, $repo->countQuestions($filters, $admin), 'Admins have no bank visibility');
+        assertSame(0, $repo->countQuestions($filters, $otherAdmin), 'Admins cannot cross tenant scope');
+        assertSame(0, $repo->countQuestions($filters, $super), 'Super admins have no bank visibility');
 
-        assertTrue(is_array($repo->findVisibleQuestion($ids[4], $teacher)), 'Approved institution row is visible');
-        assertSame(null, $repo->findVisibleQuestion($ids[2], $teacher), 'Another teacher draft is hidden');
-        assertTrue(is_array($repo->findVisibleQuestion($ids[2], $admin)), 'Admin can review a draft');
-        assertSame(null, $repo->findVisibleQuestion($foreignId, $teacher), 'Cross-institution row is hidden');
+        assertTrue(is_array($repo->findOwnedQuestion($ids[0], $teacher)), 'The owner can read their question');
+        assertSame(null, $repo->findOwnedQuestion($ids[2], $teacher), 'Cross-teacher lookup returns null');
+        assertSame(null, $repo->findOwnedQuestion($ownerlessId, $teacher), 'Ownerless rows are not part of a private bank');
+        assertSame(null, $repo->findOwnedQuestion($foreignId, $teacher), 'Cross-institution rows are hidden');
+        assertSame(null, $repo->findOwnedQuestion($ids[0], $admin), 'Admins cannot read bank questions');
 
         $teacherList = $repo->listQuestions($filters, $teacher, 50, 0);
-        assertSame(4, count($teacherList), 'List and count use the same visibility rule');
+        assertSame(2, count($teacherList), 'List and count use the same owner rule');
+
+        $export = $repo->questionsForExport($filters, $teacher);
+        assertSame(2, count($export), 'Export is limited to the teacher’s own rows');
     } finally {
         if ($db->inTransaction()) {
             $db->rollBack();
@@ -345,7 +414,7 @@ test('Teachers see only their own and approved institution questions', function 
     }
 });
 
-test('Approval flow version edits and returns shared questions to pending', function () {
+test('Content edits create immutable versions without any approval workflow', function () {
     $pdo = testDatabase();
     if (!$pdo) {
         skip('database is not reachable');
@@ -354,65 +423,41 @@ test('Approval flow version edits and returns shared questions to pending', func
 
     $db = Database::getInstance()->getConnection();
     $repo = new QuizRepository();
-    $bankRepo = new QuestionBankRepository();
 
     $db->beginTransaction();
     try {
-        $quizId = questionBankQuiz($repo, $pdo, '1C approval ' . uniqid());
-        $text = '1C approval question ' . uniqid();
+        $quizId = questionBankQuiz($repo, $pdo, 'private edit ' . uniqid());
+        $text = 'private question ' . uniqid();
         $questionId = $repo->addQuestion([
             'quiz_id' => $quizId,
             'question_text' => $text,
             'question_type' => 'short_answer',
             'points' => 2,
             'correct_answer' => 'First',
+            'actor_user_id' => 11,
         ]);
 
         $row = qmetaQuestionRow($db, $questionId);
-        assertSame('private', $row['visibility'], 'New questions start private');
-        assertSame('draft', $row['approval_status'], 'New questions start as drafts');
+        assertSame(11, (int) $row['owner_user_id'], 'The author owns the private bank row');
+        assertSame('private', $row['visibility'], 'Legacy columns stay private');
+        assertSame('draft', $row['approval_status'], 'Legacy columns stay draft');
         assertNotNull($row['current_version_id'], 'Version 1 is created on add');
         assertSame(1, qmetaVersionCount($db, $questionId));
 
-        assertTrue($bankRepo->submitForApproval($questionId, 11));
-        $row = qmetaQuestionRow($db, $questionId);
-        assertSame('pending', $row['approval_status']);
-        assertSame('private', $row['visibility']);
-
-        assertTrue($bankRepo->approve($questionId, 10, 'Looks good'));
-        $row = qmetaQuestionRow($db, $questionId);
-        assertSame('approved', $row['approval_status']);
-        assertSame('institution', $row['visibility']);
-        assertSame(10, (int) $row['reviewed_by']);
-        assertSame('Looks good', $row['review_note']);
-
-        // A non-admin content edit creates a new version and returns the
-        // institution copy to review.
         assertTrue($repo->updateQuestion($questionId, [
             'question_text' => $text . ' edited',
             'correct_answer' => 'Second',
             'actor_user_id' => 11,
-            'reset_approval_on_edit' => true,
         ], $quizId));
 
         $row = qmetaQuestionRow($db, $questionId);
-        assertSame('pending', $row['approval_status'], 'The edit must re-enter review');
-        assertSame('private', $row['visibility'], 'The edit must stop being shared');
+        assertSame(11, (int) $row['owner_user_id'], 'Editing cannot reassign ownership');
+        assertSame('private', $row['visibility'], 'Editing does not start a sharing workflow');
+        assertSame('draft', $row['approval_status'], 'Editing does not start an approval workflow');
         assertSame(2, qmetaVersionCount($db, $questionId), 'The edit freezes version 2');
         $versionTwo = $db->prepare('SELECT version_id FROM question_versions WHERE question_id = :id AND version_number = 2');
         $versionTwo->execute(['id' => $questionId]);
         assertSame((int) $versionTwo->fetchColumn(), (int) $row['current_version_id'], 'The bank points at the newest version');
-
-        // Admin edits keep approval and still create versions.
-        assertTrue($bankRepo->approve($questionId, 10, null));
-        assertTrue($repo->updateQuestion($questionId, [
-            'explanation' => 'Admin clarification',
-            'actor_user_id' => 10,
-            'reset_approval_on_edit' => false,
-        ], $quizId));
-        $row = qmetaQuestionRow($db, $questionId);
-        assertSame('approved', $row['approval_status'], 'Admin edits stay approved');
-        assertSame(3, qmetaVersionCount($db, $questionId));
     } finally {
         if ($db->inTransaction()) {
             $db->rollBack();
@@ -420,7 +465,7 @@ test('Approval flow version edits and returns shared questions to pending', func
     }
 });
 
-test('Pinned versions drive serving, review and grading after a bank edit', function () {
+test('Pinned versions drive serving and grading after a bank edit', function () {
     $pdo = testDatabase();
     if (!$pdo) {
         skip('database is not reachable');
@@ -445,6 +490,7 @@ test('Pinned versions drive serving, review and grading after a bank edit', func
             'points' => 2,
             'correct_answer' => 'Original',
             'explanation' => 'Original explanation',
+            'actor_user_id' => 11,
         ]);
 
         // A per-quiz points override is captured in the snapshot but not in
@@ -470,7 +516,7 @@ test('Pinned versions drive serving, review and grading after a bank edit', func
             'question_text' => $originalText . ' edited',
             'correct_answer' => 'Edited',
             'explanation' => 'Edited explanation',
-            'actor_user_id' => 10,
+            'actor_user_id' => 11,
         ], $quizId));
         assertSame(2, qmetaVersionCount($db, $questionId), 'The edit creates version 2');
 
@@ -539,6 +585,7 @@ test('Wrong answers grade as zero under strict SQL mode', function () {
             'question_type' => 'short_answer',
             'points' => 2,
             'correct_answer' => 'Right',
+            'actor_user_id' => 11,
         ]);
 
         $submissionId = 920000000 + random_int(1, 999999);
@@ -572,105 +619,61 @@ test('Wrong answers grade as zero under strict SQL mode', function () {
     }
 });
 
-test('Forking copies bank content into a new private question with its own versions', function () {
+test('Sections and topics are teacher-owned and guarded when in use', function () {
     $pdo = testDatabase();
     if (!$pdo) {
         skip('database is not reachable');
     }
-    qmetaReady($pdo);
+    qmetaTaxonomyReady($pdo);
 
     $db = Database::getInstance()->getConnection();
     $bankRepo = new QuestionBankRepository();
 
     $db->beginTransaction();
     try {
-        $sourceId = qmetaInsertQuestion($db, [
-            'institution_id' => 1,
-            'owner_user_id' => 11,
-            'question_text' => 'Fork source ' . uniqid(),
-            'question_type' => 'multiple_choice',
-            'points' => 3,
-            'correct_answer' => 'B',
-            'visibility' => 'institution',
-            'approval_status' => 'approved',
-        ]);
-        $db->prepare("
-            INSERT INTO question_bank_options (question_id, option_label, option_text, is_correct)
-            VALUES (:id1, 'A', 'Wrong', 0), (:id2, 'B', 'Right', 1)
-        ")->execute(['id1' => $sourceId, 'id2' => $sourceId]);
-        $bankRepo->createVersion($sourceId, 11);
+        $sectionName = 'Section ' . uniqid();
+        $sectionId = $bankRepo->createCategory(1, 11, $sectionName, null);
+        assertTrue((int) $sectionId > 0);
+        assertTrue(is_array($bankRepo->findCategory($sectionId, 1, 11)));
+        assertSame(null, $bankRepo->findCategory($sectionId, 2, 11), 'Section cannot cross institutions');
+        assertSame(null, $bankRepo->findCategory($sectionId, 1, 99), 'Section cannot cross teachers');
 
-        $actor = ['user_id' => 99, 'role' => 'teacher', 'roles' => ['teacher'], 'institution_id' => 1];
-        $forkId = $bankRepo->fork($sourceId, $actor);
-        assertNotNull($forkId, 'Fork must return the new question ID');
-        assertNotSame($sourceId, $forkId);
-
-        $fork = qmetaQuestionRow($db, $forkId);
-        assertSame(99, (int) $fork['owner_user_id'], 'The fork belongs to the copying teacher');
-        assertSame('private', $fork['visibility']);
-        assertSame('draft', $fork['approval_status']);
-        assertSame($sourceId, (int) $fork['forked_from_id']);
-        assertSame(3, (int) $fork['points'], 'Content is copied');
-        assertSame(1, qmetaVersionCount($db, $forkId), 'The fork starts at version 1');
-
-        $optionCount = $db->prepare('SELECT COUNT(*) FROM question_bank_options WHERE question_id = :id');
-        $optionCount->execute(['id' => $forkId]);
-        assertSame(2, (int) $optionCount->fetchColumn(), 'Options are copied');
-
-        $source = qmetaQuestionRow($db, $sourceId);
-        assertSame(11, (int) $source['owner_user_id'], 'The original owner is unchanged');
-        assertSame('approved', $source['approval_status'], 'The original approval is unchanged');
-    } finally {
-        if ($db->inTransaction()) {
-            $db->rollBack();
-        }
-    }
-});
-
-test('Categories and topics are institution-scoped and guarded when in use', function () {
-    $pdo = testDatabase();
-    if (!$pdo) {
-        skip('database is not reachable');
-    }
-    qmetaReady($pdo);
-
-    $db = Database::getInstance()->getConnection();
-    $bankRepo = new QuestionBankRepository();
-
-    $db->beginTransaction();
-    try {
-        $name = 'Category ' . uniqid();
-        $categoryId = $bankRepo->createCategory(1, $name, null);
-        assertTrue((int) $categoryId > 0);
-        assertTrue(is_array($bankRepo->findCategory($categoryId, 1)));
-        assertSame(null, $bankRepo->findCategory($categoryId, 2), 'Category cannot cross institutions');
+        $unitName = 'Unit ' . uniqid();
+        $unitId = $bankRepo->createCategory(1, 11, $unitName, $sectionId);
+        $unit = $bankRepo->findCategory($unitId, 1, 11);
+        assertTrue(is_array($unit));
+        assertSame($sectionId, (int) $unit['parent_id'], 'Unit/Week nests under a Section');
 
         $topicName = 'Topic ' . uniqid();
-        $topicId = $bankRepo->createTopic(1, null, $topicName);
+        $topicId = $bankRepo->createTopic(1, 11, null, $topicName);
         assertTrue((int) $topicId > 0);
-        assertSame(null, $bankRepo->findTopic($topicId, 2), 'Topic cannot cross institutions');
+        assertTrue(is_array($bankRepo->findTopic($topicId, 1, 11)));
+        assertSame(null, $bankRepo->findTopic($topicId, 2, 11), 'Topic cannot cross institutions');
+        assertSame(null, $bankRepo->findTopic($topicId, 1, 99), 'Topic cannot cross teachers');
 
-        $list = $bankRepo->listTopics(1, null);
-        assertTrue(count($list) >= 1);
+        $list = $bankRepo->listTopics(1, null, 11);
         $found = false;
         foreach ($list as $topic) {
             if ((int) $topic['topic_id'] === $topicId) {
                 $found = true;
             }
         }
-        assertTrue($found, 'The new topic is listed');
+        assertTrue($found, 'The teacher’s new topic is listed');
+        assertSame([], $bankRepo->listTopics(1, null, 99), 'Another teacher has a separate taxonomy');
 
         qmetaInsertQuestion($db, [
             'institution_id' => 1,
-            'category_id' => $categoryId,
+            'owner_user_id' => 11,
+            'category_id' => $unitId,
             'topic_id' => $topicId,
         ]);
-        assertTrue($bankRepo->categoryInUse($categoryId, 1), 'Used category is detected');
-        assertTrue($bankRepo->topicInUse($topicId, 1), 'Used topic is detected');
+        assertTrue($bankRepo->categoryInUse($unitId, 1, 11), 'Used section is detected');
+        assertTrue($bankRepo->topicInUse($topicId, 1, 11), 'Used topic is detected');
+        assertFalse($bankRepo->categoryInUse($unitId, 1, 99), 'Another teacher cannot use this section');
 
-        $unusedCategory = $bankRepo->createCategory(1, 'Unused ' . uniqid(), null);
-        assertTrue($bankRepo->deleteCategory($unusedCategory, 1));
-        assertSame(null, $bankRepo->findCategory($unusedCategory, 1));
+        $unusedSection = $bankRepo->createCategory(1, 11, 'Unused ' . uniqid(), null);
+        assertTrue($bankRepo->deleteCategory($unusedSection, 1, 11));
+        assertSame(null, $bankRepo->findCategory($unusedSection, 1, 11));
     } finally {
         if ($db->inTransaction()) {
             $db->rollBack();
@@ -678,7 +681,7 @@ test('Categories and topics are institution-scoped and guarded when in use', fun
     }
 });
 
-test('An existing bank question can be linked to a quiz without copying it', function () {
+test('Only the teacher’s own bank question can be linked to a quiz', function () {
     $pdo = testDatabase();
     if (!$pdo) {
         skip('database is not reachable');
@@ -687,36 +690,50 @@ test('An existing bank question can be linked to a quiz without copying it', fun
 
     $db = Database::getInstance()->getConnection();
     $repo = new QuizRepository();
+    $ownerId = 11;
 
     $db->beginTransaction();
     try {
         // Create the quiz inside the transaction so it rolls back with the
         // rest of the smoke data.
-        $quiz = questionBankQuiz($repo, $pdo, '1C bank link ' . uniqid());
+        $quiz = questionBankQuiz($repo, $pdo, 'private bank link ' . uniqid());
         $institutionId = qmetaInstitutionForQuiz($db, $quiz);
         assertTrue($institutionId > 0, 'The test quiz must have an institution');
 
         $questionId = qmetaInsertQuestion($db, [
             'institution_id' => $institutionId,
-            'owner_user_id' => null,
-            'visibility' => 'institution',
-            'approval_status' => 'approved',
+            'owner_user_id' => $ownerId,
+            'question_text' => 'Owned bank link ' . uniqid(),
         ]);
 
-        assertTrue($repo->linkExistingQuestion($quiz, $questionId), 'An approved bank row can be linked');
+        assertTrue($repo->linkExistingQuestion($quiz, $questionId, $ownerId), 'The owner can link their bank row');
         $links = $db->prepare('SELECT COUNT(*) FROM quiz_question_links WHERE quiz_id = :quiz_id AND question_id = :question_id');
         $links->execute(['quiz_id' => $quiz, 'question_id' => $questionId]);
         assertSame(1, (int) $links->fetchColumn());
-        assertSame(1, count($repo->getQuestions($quiz)), 'The quiz serves the linked bank row');
+        assertSame(1, count($repo->getQuestions($quiz, $ownerId)), 'The quiz serves the linked bank row');
 
-        assertFalse($repo->linkExistingQuestion($quiz, $questionId), 'Linking twice is rejected');
+        assertFalse($repo->linkExistingQuestion($quiz, $questionId, $ownerId), 'Linking twice is rejected');
+
+        $otherId = qmetaInsertQuestion($db, [
+            'institution_id' => $institutionId,
+            'owner_user_id' => 99,
+            'question_text' => 'Other teacher bank link ' . uniqid(),
+        ]);
+        assertFalse($repo->linkExistingQuestion($quiz, $otherId, $ownerId), 'Another teacher’s row cannot be linked');
+
+        $ownerlessId = qmetaInsertQuestion($db, [
+            'institution_id' => $institutionId,
+            'owner_user_id' => null,
+            'question_text' => 'Ownerless bank link ' . uniqid(),
+        ]);
+        assertFalse($repo->linkExistingQuestion($quiz, $ownerlessId, $ownerId), 'Ownerless rows cannot be linked');
 
         $foreignId = qmetaInsertQuestion($db, [
             'institution_id' => $institutionId + 100,
-            'visibility' => 'institution',
-            'approval_status' => 'approved',
+            'owner_user_id' => $ownerId,
+            'question_text' => 'Foreign bank link ' . uniqid(),
         ]);
-        assertFalse($repo->linkExistingQuestion($quiz, $foreignId), 'Another institution cannot be linked');
+        assertFalse($repo->linkExistingQuestion($quiz, $foreignId, $ownerId), 'Another institution cannot be linked');
     } finally {
         if ($db->inTransaction()) {
             $db->rollBack();
@@ -724,7 +741,7 @@ test('An existing bank question can be linked to a quiz without copying it', fun
     }
 });
 
-test('CSV import reuses approved bank rows but not hidden drafts', function () {
+test('CSV import reuses only questions in the same teacher’s private bank', function () {
     $pdo = testDatabase();
     if (!$pdo) {
         skip('database is not reachable');
@@ -733,31 +750,34 @@ test('CSV import reuses approved bank rows but not hidden drafts', function () {
 
     $db = Database::getInstance()->getConnection();
     $repo = new QuizRepository();
+    $ownerId = 11;
 
     $db->beginTransaction();
     try {
         // Create the quiz inside the transaction so it rolls back with the
         // rest of the smoke data.
-        $quiz = questionBankQuiz($repo, $pdo, '1C CSV reuse ' . uniqid());
+        $quiz = questionBankQuiz($repo, $pdo, 'private CSV reuse ' . uniqid());
         $institutionId = qmetaInstitutionForQuiz($db, $quiz);
         assertTrue($institutionId > 0, 'The test quiz must have an institution');
 
-        $approvedText = 'CSV approved ' . uniqid();
-        $draftText = 'CSV draft ' . uniqid();
+        $ownedText = 'CSV owned ' . uniqid();
+        $otherText = 'CSV other teacher ' . uniqid();
+        $ownerlessText = 'CSV ownerless ' . uniqid();
 
         qmetaInsertQuestion($db, [
             'institution_id' => $institutionId,
-            'owner_user_id' => null,
-            'question_text' => $approvedText,
-            'visibility' => 'institution',
-            'approval_status' => 'approved',
+            'owner_user_id' => $ownerId,
+            'question_text' => $ownedText,
+        ]);
+        qmetaInsertQuestion($db, [
+            'institution_id' => $institutionId,
+            'owner_user_id' => 99,
+            'question_text' => $otherText,
         ]);
         qmetaInsertQuestion($db, [
             'institution_id' => $institutionId,
             'owner_user_id' => null,
-            'question_text' => $draftText,
-            'visibility' => 'private',
-            'approval_status' => 'draft',
+            'question_text' => $ownerlessText,
         ]);
 
         $import = static function (string $text) use ($repo, $quiz): array {
@@ -770,18 +790,24 @@ test('CSV import reuses approved bank rows but not hidden drafts', function () {
                 ]),
             ]];
         };
+        $countText = static function (string $text) use ($db): int {
+            $stmt = $db->prepare('SELECT COUNT(*) FROM questions WHERE TRIM(question_text) = :text');
+            $stmt->execute(['text' => $text]);
 
-        $approvedResult = $repo->importQuestions($quiz, $import($approvedText));
-        assertSame(1, $approvedResult['imported'], 'An approved bank row must be linked');
-        $approvedCount = $db->prepare('SELECT COUNT(*) FROM questions WHERE TRIM(question_text) = :text');
-        $approvedCount->execute(['text' => $approvedText]);
-        assertSame(1, (int) $approvedCount->fetchColumn(), 'No duplicate is created for approved text');
+            return (int) $stmt->fetchColumn();
+        };
 
-        $draftResult = $repo->importQuestions($quiz, $import($draftText));
-        assertSame(1, $draftResult['imported'], 'A hidden draft must be imported');
-        $draftCount = $db->prepare('SELECT COUNT(*) FROM questions WHERE TRIM(question_text) = :text');
-        $draftCount->execute(['text' => $draftText]);
-        assertSame(2, (int) $draftCount->fetchColumn(), 'A draft must not be reused');
+        $ownedResult = $repo->importQuestions($quiz, $import($ownedText), $ownerId);
+        assertSame(1, $ownedResult['imported'], 'The teacher’s own bank row must be linked');
+        assertSame(1, $countText($ownedText), 'No duplicate is created for owned text');
+
+        $otherResult = $repo->importQuestions($quiz, $import($otherText), $ownerId);
+        assertSame(1, $otherResult['imported'], 'A new row is imported');
+        assertSame(2, $countText($otherText), 'Another teacher’s row must not be reused');
+
+        $ownerlessResult = $repo->importQuestions($quiz, $import($ownerlessText), $ownerId);
+        assertSame(1, $ownerlessResult['imported'], 'A new row is imported');
+        assertSame(2, $countText($ownerlessText), 'An ownerless row must not be reused');
     } finally {
         if ($db->inTransaction()) {
             $db->rollBack();

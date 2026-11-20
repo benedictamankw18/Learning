@@ -238,6 +238,7 @@ test('Question import appends, skips duplicates and continues after bad rows', f
 
         $repo->addQuestion([
             'quiz_id' => $quizId,
+            'actor_user_id' => 11,
             'question_text' => 'Existing question',
             'question_type' => 'short_answer',
             'order_index' => 0,
@@ -264,7 +265,7 @@ test('Question import appends, skips duplicates and continues after bad rows', f
             ])],
         ];
 
-        $summary = $repo->importQuestions($quizId, $prepared);
+        $summary = $repo->importQuestions($quizId, $prepared, 11);
 
         assertSame(2, $summary['imported']);
         assertSame(2, $summary['skipped']);
@@ -375,9 +376,28 @@ test('Question import and export endpoints are routed and wired into the teacher
     assertContains('QuestionBankAPI.exportQuestions(state.filters)', $bankJs);
     assertContains('QuestionBankAPI.downloadImportTemplate()', $bankJs);
     assertContains('bindCsvEvents()', $bankJs);
+    assertContains('QuestionBankAPI.getQuestion(questionId)', $bankJs, 'Editor options come from the owned question');
+
+    foreach (['QUESTION_BANK_SUBMIT', 'QUESTION_BANK_APPROVE', 'QUESTION_BANK_REJECT', 'QUESTION_BANK_FORK', 'QUESTION_BANK_VERSIONS'] as $constant) {
+        assertFalse(str_contains($config, $constant), "Removed endpoint {$constant} must not be defined");
+    }
+    foreach ([
+        'submitForApproval: (id) => API.post(API_ENDPOINTS.QUESTION_BANK_SUBMIT',
+        'approve: (id, note) => API.post(API_ENDPOINTS.QUESTION_BANK_APPROVE',
+        'reject: (id, note) => API.post(API_ENDPOINTS.QUESTION_BANK_REJECT',
+        'fork: (id) => API.post(API_ENDPOINTS.QUESTION_BANK_FORK',
+        'getVersions: (id) => API.get(API_ENDPOINTS.QUESTION_BANK_VERSIONS',
+    ] as $helper) {
+        assertFalse(str_contains($api, $helper), 'Removed QuestionBankAPI helper must not be defined');
+    }
+    foreach (['approval_status', 'statusBadge', 'visibilityBadge', 'getVersions', 'submitForApproval', 'forkQuestion', 'showVersions'] as $needle) {
+        assertFalse(str_contains($bankJs, $needle), "Removed bank UI reference must be absent: {$needle}");
+    }
+    assertFalse(str_contains($quizJs, 'q.approval_status'), 'Bank picker must not show approval status');
+    assertContains('Search your private bank', $quizPage, 'Bank picker must use private-bank wording');
 });
 
-test('Bank CSV append keeps private drafts, freezes versions and skips duplicates', function () {
+test('Bank CSV append stays private to its owner, freezes versions and skips duplicates', function () {
     $pdo = testDatabase();
     if (!$pdo) {
         skip('database is not reachable');
@@ -396,6 +416,12 @@ test('Bank CSV append keeps private drafts, freezes versions and skips duplicate
     $db->beginTransaction();
     try {
         $firstText = $marker . ' one';
+        $otherText = $marker . ' other teacher';
+        $db->prepare("
+            INSERT INTO questions (institution_id, owner_user_id, question_text, question_type, points)
+            VALUES (1, 990222, :question_text, 'short_answer', 1)
+        ")->execute(['question_text' => $otherText]);
+
         $prepared = [
             ['row' => 2, 'question' => QuestionCsv::buildQuestion([
                 'question_text' => $firstText,
@@ -417,34 +443,43 @@ test('Bank CSV append keeps private drafts, freezes versions and skips duplicate
                 'question_type' => 'true_false',
                 'correct_answer' => 'TRUE',
             ])],
+            ['row' => 5, 'question' => QuestionCsv::buildQuestion([
+                'question_text' => $otherText,
+                'question_type' => 'short_answer',
+                'correct_answer' => 'Anything',
+            ])],
         ];
 
         $summary = $repo->importQuestions($prepared, $actor, 1);
-        assertSame(2, $summary['imported'], 'Two new questions should be appended');
-        assertSame(1, $summary['skipped'], 'Duplicate text should be skipped');
+        assertSame(3, $summary['imported'], 'Three non-duplicate rows should be appended');
+        assertSame(1, $summary['skipped'], 'Duplicate text in the teacher’s own bank is skipped');
         assertSame(0, $summary['failed'], 'Valid rows should not fail');
 
-        $rows = $db->prepare('SELECT question_id, visibility, approval_status, owner_user_id
-            FROM questions WHERE question_text LIKE :marker ORDER BY question_id ASC');
-        $rows->execute(['marker' => $marker . '%']);
+        $rows = $db->prepare('SELECT question_id, owner_user_id
+            FROM questions
+            WHERE question_text LIKE :marker AND owner_user_id = :owner_id
+            ORDER BY question_id ASC');
+        $rows->execute(['marker' => $marker . '%', 'owner_id' => 990111]);
         $created = $rows->fetchAll(PDO::FETCH_ASSOC);
-        assertSame(2, count($created), 'Only non-duplicate rows are stored');
+        assertSame(3, count($created), 'Only non-duplicate rows are stored for the importer');
 
         $versionStmt = $db->prepare('SELECT COUNT(*) FROM question_versions WHERE question_id = :id');
         foreach ($created as $row) {
-            assertSame('private', $row['visibility'], 'Imported bank questions stay private');
-            assertSame('draft', $row['approval_status'], 'Imported bank questions start as drafts');
             assertSame(990111, (int) $row['owner_user_id'], 'Importer owns the new question');
             $versionStmt->execute(['id' => $row['question_id']]);
             assertSame(1, (int) $versionStmt->fetchColumn(), 'Each import creates its first version');
         }
+
+        $otherCount = $db->prepare('SELECT COUNT(*) FROM questions WHERE TRIM(question_text) = :text');
+        $otherCount->execute(['text' => $otherText]);
+        assertSame(2, (int) $otherCount->fetchColumn(), 'Another teacher’s row is not reused');
 
         $optionStmt = $db->prepare('SELECT COUNT(*) FROM question_bank_options WHERE question_id = :id');
         $optionStmt->execute(['id' => $created[0]['question_id']]);
         assertSame(2, (int) $optionStmt->fetchColumn(), 'Multiple choice options are imported');
 
         $exportRows = $repo->questionsForExport(['q' => $marker], $actor);
-        assertSame(2, count($exportRows), 'Export only returns visible questions');
+        assertSame(3, count($exportRows), 'Export only returns the teacher’s own questions');
         assertContains('option_a', QuestionCsv::serialize($exportRows), 'Export uses the canonical CSV header');
     } finally {
         if ($db->inTransaction()) {

@@ -4,7 +4,7 @@
   const state = {
     questions: [],
     pagination: { current_page: 1, per_page: 25, total: 0, total_pages: 1 },
-    filters: { q: '', category_id: '', subject_id: '', topic_id: '', approval_status: '', visibility: '', is_archived: null },
+    filters: { q: '', category_id: '', subject_id: '', topic_id: '', include_archived: false },
     categories: [],
     subjects: [],
     topics: [],
@@ -28,8 +28,7 @@
       filterCategory: document.getElementById('qbFilterCategory'),
       filterSubject: document.getElementById('qbFilterSubject'),
       filterTopic: document.getElementById('qbFilterTopic'),
-      filterStatus: document.getElementById('qbFilterStatus'),
-      filterOwnership: document.getElementById('qbFilterOwnership'),
+      includeArchived: document.getElementById('qbIncludeArchived'),
       refreshBtn: document.getElementById('qbRefreshBtn'),
       newBtn: document.getElementById('qbNewBtn'),
       importBtn: document.getElementById('qbImportBtn'),
@@ -63,12 +62,6 @@
       optionsField: document.getElementById('qbOptionsField'),
       optionsList: document.getElementById('qbOptionsList'),
       addOptionBtn: document.getElementById('qbAddOptionBtn'),
-
-      versionsModal: document.getElementById('qbVersionsModal'),
-      versionsTitle: document.getElementById('qbVersionsTitle'),
-      versionsBody: document.getElementById('qbVersionsBody'),
-      versionsClose: document.getElementById('qbVersionsClose'),
-      versionsDone: document.getElementById('qbVersionsDone'),
 
       quizModal: document.getElementById('qbQuizModal'),
       quizClose: document.getElementById('qbQuizClose'),
@@ -119,16 +112,6 @@
     return map[type] || type || '-';
   }
 
-  function statusBadge(status) {
-    const s = String(status || 'draft');
-    return '<span class="qb-badge qb-badge-' + escapeHtml(s) + '">' + escapeHtml(s) + '</span>';
-  }
-
-  function visibilityBadge(v) {
-    const value = String(v || 'private');
-    return '<span class="qb-badge qb-badge-' + escapeHtml(value) + '">' + escapeHtml(value) + '</span>';
-  }
-
   function openModal(modal) { if (modal) modal.classList.add('open'); }
   function closeModal(modal) { if (modal) modal.classList.remove('open'); }
 
@@ -166,8 +149,8 @@
   }
 
   function populateSelects() {
-    fillSelect(els.filterCategory, state.categories, 'name', 'category_id', 'All categories', state.filters.category_id);
-    fillSelect(els.filterSubject, state.subjects, 'subject_name', 'subject_id', 'All subjects', state.filters.subject_id);
+    fillSelect(els.filterCategory, state.categories, 'name', 'category_id', 'All sections', state.filters.category_id);
+    fillSelect(els.filterSubject, state.subjects, 'subject_name', 'subject_id', 'All units / weeks', state.filters.subject_id);
 
     let topics = state.topics;
     if (state.filters.subject_id) {
@@ -193,11 +176,20 @@
       category_id: state.filters.category_id,
       subject_id: state.filters.subject_id,
       topic_id: state.filters.topic_id,
-      approval_status: state.filters.approval_status,
-      visibility: state.filters.visibility,
-      is_archived: state.filters.is_archived,
+      include_archived: state.filters.include_archived ? 1 : null,
       page: state.pagination.current_page,
       limit: state.pagination.per_page,
+    };
+  }
+
+  // Only the filters still exposed in the UI are sent to CSV export.
+  function buildExportFilters() {
+    return {
+      q: state.filters.q,
+      category_id: state.filters.category_id,
+      subject_id: state.filters.subject_id,
+      topic_id: state.filters.topic_id,
+      include_archived: state.filters.include_archived ? 1 : null,
     };
   }
 
@@ -211,7 +203,7 @@
   }
 
   async function loadQuestions() {
-    if (els.listBody) els.listBody.innerHTML = '<tr><td colspan="8" class="qb-empty">Loading questions...</td></tr>';
+    if (els.listBody) els.listBody.innerHTML = '<tr><td colspan="5" class="qb-empty">Loading questions...</td></tr>';
     try {
       const response = await QuestionBankAPI.getQuestions(cleanParams(buildFilters()));
       const data = response.data || {};
@@ -228,7 +220,7 @@
       setNotice('');
     } catch (error) {
       if (els.listBody) {
-        els.listBody.innerHTML = '<tr><td colspan="8" class="qb-empty">Failed to load questions.</td></tr>';
+        els.listBody.innerHTML = '<tr><td colspan="5" class="qb-empty">Failed to load questions.</td></tr>';
       }
       setNotice(error.message || 'Unable to load questions.', 'error');
     }
@@ -237,34 +229,18 @@
   function renderTable() {
     if (!els.listBody) return;
     if (state.questions.length === 0) {
-      els.listBody.innerHTML = '<tr><td colspan="8" class="qb-empty">No questions match your filters.</td></tr>';
+      els.listBody.innerHTML = '<tr><td colspan="5" class="qb-empty">No questions match your filters.</td></tr>';
       return;
     }
-
-    const user = currentUser() || {};
-    const userId = Number(user.user_id || 0);
-    const isAdmin = !!(user.is_super_admin) || String(user.role || '').toLowerCase() === 'admin'
-      || (Array.isArray(user.roles) && user.roles.some(function (r) { return String(r).toLowerCase() === 'admin'; }));
 
     els.listBody.innerHTML = state.questions.map(function (q) {
       const text = String(q.question_text || '');
       const preview = text.length > 150 ? text.substring(0, 150) + '…' : text;
-      const owns = Number(q.owner_user_id || 0) === userId;
-      const canEdit = isAdmin || owns;
-      const approved = String(q.approval_status) === 'approved';
+      const archived = Number(q.is_archived) === 1;
 
       const actions = [];
-      if (canEdit) {
-        actions.push('<button class="qb-btn qb-btn-secondary qb-btn-sm" data-action="edit" data-id="' + q.question_id + '">Edit</button>');
-        if (!approved) {
-          actions.push('<button class="qb-btn qb-btn-secondary qb-btn-sm" data-action="submit" data-id="' + q.question_id + '">Submit</button>');
-        }
-        const archived = Number(q.is_archived) === 1;
-        actions.push('<button class="qb-btn qb-btn-secondary qb-btn-sm" data-action="archive" data-id="' + q.question_id + '" data-archived="' + archived + '">' + (archived ? 'Restore' : 'Archive') + '</button>');
-      } else {
-        actions.push('<button class="qb-btn qb-btn-secondary qb-btn-sm" data-action="fork" data-id="' + q.question_id + '">Fork</button>');
-      }
-      actions.push('<button class="qb-btn qb-btn-secondary qb-btn-sm" data-action="versions" data-id="' + q.question_id + '">Versions</button>');
+      actions.push('<button class="qb-btn qb-btn-secondary qb-btn-sm" data-action="edit" data-id="' + q.question_id + '">Edit</button>');
+      actions.push('<button class="qb-btn qb-btn-secondary qb-btn-sm" data-action="archive" data-id="' + q.question_id + '" data-archived="' + archived + '">' + (archived ? 'Restore' : 'Archive') + '</button>');
       actions.push('<button class="qb-btn qb-btn-primary qb-btn-sm" data-action="addtoquiz" data-id="' + q.question_id + '">Add to quiz</button>');
 
       const categoryTopic = [q.category_name, q.topic_name].filter(Boolean).map(escapeHtml).join(' / ') || '-';
@@ -274,9 +250,6 @@
         '<td>' + escapeHtml(typeLabel(q.question_type)) + '</td>' +
         '<td>' + categoryTopic + '</td>' +
         '<td>' + escapeHtml(q.points) + '</td>' +
-        '<td>' + statusBadge(q.approval_status) + '</td>' +
-        '<td>' + visibilityBadge(q.visibility) + '</td>' +
-        '<td>' + escapeHtml(q.version_count != null ? q.version_count : (q.current_version_id ? '≥1' : '0')) + '</td>' +
         '<td><div class="qb-row-actions">' + actions.join('') + '</div></td>' +
         '</tr>';
     }).join('');
@@ -342,15 +315,13 @@
     if (!els.optionsList) return;
     els.optionsList.innerHTML = '';
     try {
-      const response = await QuestionBankAPI.getVersions(questionId);
-      const versions = normalizeRows(response, 'versions');
-      let options = [];
-      if (versions.length) {
-        const content = versions[0].content || {};
-        options = Array.isArray(content.options) ? content.options : [];
-      }
+      const response = await QuestionBankAPI.getQuestion(questionId);
+      const question = response && response.data ? response.data : (response || {});
+      const options = Array.isArray(question.options) ? question.options : [];
       if (!options.length) {
-        options = [{ option_label: 'A', option_text: '', is_correct: 0 }, { option_label: 'B', option_text: '', is_correct: 0 }];
+        addOptionRow('A', '', false);
+        addOptionRow('B', '', false);
+        return;
       }
       options.forEach(function (o) {
         addOptionRow(o.option_label, o.option_text, Number(o.is_correct) === 1);
@@ -437,26 +408,6 @@
 
   /* ---------------- Actions ---------------- */
 
-  async function submitForApproval(id) {
-    try {
-      await QuestionBankAPI.submitForApproval(id);
-      showToast('Submitted for approval', 'success');
-      await loadQuestions();
-    } catch (error) {
-      setNotice(error.message || 'Unable to submit question.', 'error');
-    }
-  }
-
-  async function forkQuestion(id) {
-    try {
-      await QuestionBankAPI.fork(id);
-      showToast('Question copied to your bank', 'success');
-      await loadQuestions();
-    } catch (error) {
-      setNotice(error.message || 'Unable to fork question.', 'error');
-    }
-  }
-
   async function archiveQuestion(id, archived) {
     try {
       await QuestionBankAPI.archive(id, archived === 'true' || archived === true ? false : true);
@@ -464,39 +415,6 @@
       await loadQuestions();
     } catch (error) {
       setNotice(error.message || 'Unable to update question.', 'error');
-    }
-  }
-
-  async function showVersions(id) {
-    if (!els.versionsBody) return;
-    els.versionsBody.innerHTML = '<p>Loading versions...</p>';
-    els.versionsTitle.textContent = 'Version History #' + id;
-    openModal(els.versionsModal);
-    try {
-      const response = await QuestionBankAPI.getVersions(id);
-      const versions = normalizeRows(response, 'versions');
-      if (!versions.length) {
-        els.versionsBody.innerHTML = '<p>No versions found.</p>';
-        return;
-      }
-      els.versionsBody.innerHTML = versions.map(function (v) {
-        const c = v.content || {};
-        const opts = Array.isArray(c.options) ? c.options : [];
-        const optionsHtml = opts.length
-          ? '<p><strong>Options:</strong> ' + opts.map(function (o) {
-              return escapeHtml(o.option_label) + '. ' + escapeHtml(o.option_text) + (Number(o.is_correct) === 1 ? ' ✓' : '');
-            }).join('; ') + '</p>'
-          : '';
-        return '<div class="qb-version">' +
-          '<h4>Version ' + escapeHtml(v.version_number) + ' <span style="font-weight:normal;color:#64748b;font-size:0.75rem;">' + escapeHtml(v.created_at || '') + ' by ' + escapeHtml(v.created_by_username || 'system') + '</span></h4>' +
-          '<p><strong>Text:</strong> ' + escapeHtml(c.question_text) + '</p>' +
-          '<p><strong>Type:</strong> ' + escapeHtml(typeLabel(c.question_type)) + ' · <strong>Points:</strong> ' + escapeHtml(c.points) + ' · <strong>Difficulty:</strong> ' + escapeHtml(c.difficulty) + '</p>' +
-          '<p><strong>Correct answer:</strong> ' + escapeHtml(c.correct_answer || '-') + '</p>' +
-          optionsHtml +
-          '</div>';
-      }).join('');
-    } catch (error) {
-      els.versionsBody.innerHTML = '<p>Failed to load versions.</p>';
     }
   }
 
@@ -736,15 +654,8 @@
       state.pagination.current_page = 1;
       loadQuestions();
     });
-    els.filterStatus?.addEventListener('change', function () {
-      state.filters.approval_status = els.filterStatus.value;
-      state.pagination.current_page = 1;
-      loadQuestions();
-    });
-    els.filterOwnership?.addEventListener('change', function () {
-      const value = els.filterOwnership.value;
-      state.filters.visibility = (value === 'private' || value === 'institution') ? value : '';
-      state.filters.is_archived = value === 'archived' ? 1 : null;
+    els.includeArchived?.addEventListener('change', function () {
+      state.filters.include_archived = !!els.includeArchived.checked;
       state.pagination.current_page = 1;
       loadQuestions();
     });
@@ -763,10 +674,7 @@
       const action = btn.getAttribute('data-action');
       const q = state.questions.find(function (item) { return Number(item.question_id) === id; });
       if (action === 'edit' && q) fillEditor(q);
-      else if (action === 'submit') submitForApproval(id);
-      else if (action === 'fork') forkQuestion(id);
       else if (action === 'archive') archiveQuestion(id, btn.getAttribute('data-archived'));
-      else if (action === 'versions') showVersions(id);
       else if (action === 'addtoquiz') openQuizModal(id);
     });
 
@@ -779,9 +687,6 @@
       const btn = e.target.closest('button[data-action="remove-option"]');
       if (btn) btn.closest('.qb-option-row')?.remove();
     });
-
-    els.versionsClose?.addEventListener('click', function () { closeModal(els.versionsModal); });
-    els.versionsDone?.addEventListener('click', function () { closeModal(els.versionsModal); });
 
     els.quizClose?.addEventListener('click', function () { closeModal(els.quizModal); });
     els.quizCancel?.addEventListener('click', function () { closeModal(els.quizModal); });

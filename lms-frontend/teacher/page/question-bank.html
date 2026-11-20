@@ -33,16 +33,6 @@
     vertical-align: top;
   }
   .qb-table th { color: #475569; font-weight: 600; background: #f8fafc; }
-  .qb-badge {
-    display: inline-block; padding: 0.15rem 0.45rem; border-radius: 999px;
-    font-size: 0.7rem; font-weight: 600; white-space: nowrap;
-  }
-  .qb-badge-draft { background: #e2e8f0; color: #475569; }
-  .qb-badge-pending { background: #fef3c7; color: #92400e; }
-  .qb-badge-approved { background: #d1fae5; color: #065f46; }
-  .qb-badge-rejected { background: #fee2e2; color: #991b1b; }
-  .qb-badge-private { background: #ede9fe; color: #5b21b6; }
-  .qb-badge-institution { background: #dbeafe; color: #1e40af; }
   .qb-row-actions { display: flex; gap: 0.25rem; flex-wrap: wrap; }
   .qb-empty { padding: 1.5rem; text-align: center; color: #64748b; }
   .qb-pagination { display: flex; gap: 0.4rem; align-items: center; justify-content: flex-end; margin-top: 0.75rem; }
@@ -76,12 +66,9 @@
   .qb-option-row { display: flex; gap: 0.4rem; align-items: center; margin-bottom: 0.4rem; }
   .qb-option-row input[type="text"] { flex: 1; border: 1px solid #cbd5e1; border-radius: 6px; padding: 0.4rem; }
   .qb-option-row input[type="checkbox"] { width: auto; }
-  .qb-version {
-    border: 1px solid #e2e8f0; border-radius: 8px; padding: 0.75rem; margin-bottom: 0.6rem;
-  }
-  .qb-version h4 { margin: 0 0 0.4rem; font-size: 0.9rem; }
-  .qb-version p { margin: 0.2rem 0; font-size: 0.8rem; color: #475569; }
   .qb-text-preview { max-width: 320px; }
+  .qb-checkbox { display: flex; align-items: center; gap: 0.4rem; font-size: 0.8rem; color: #475569; }
+  .qb-checkbox input { width: auto; }
   .qb-import-field { display: flex; flex-direction: column; gap: 0.4rem; }
   .qb-import-field label { font-size: 0.78rem; font-weight: 600; color: #334155; }
   .qb-import-field input[type="file"] {
@@ -111,7 +98,7 @@
 <div id="teacherQuestionBankRoot" class="qb-wrap">
   <div class="card">
     <div class="card-header">
-      <h3><i class="fas fa-database"></i> Question Bank</h3>
+      <h3><i class="fas fa-database"></i> Your Private Question Bank</h3>
     </div>
     <div class="card-body">
       <div id="qbNotice" class="qb-notice"></div>
@@ -123,36 +110,21 @@
             <input type="text" id="qbSearch" placeholder="Search question text..." />
           </div>
           <div class="qb-field">
-            <label for="qbFilterCategory">Category</label>
-            <select id="qbFilterCategory"><option value="">All categories</option></select>
+            <label for="qbFilterCategory">Section</label>
+            <select id="qbFilterCategory"><option value="">All sections</option></select>
           </div>
           <div class="qb-field">
-            <label for="qbFilterSubject">Subject</label>
-            <select id="qbFilterSubject"><option value="">All subjects</option></select>
+            <label for="qbFilterSubject">Unit / Week</label>
+            <select id="qbFilterSubject"><option value="">All units / weeks</option></select>
           </div>
           <div class="qb-field">
             <label for="qbFilterTopic">Topic</label>
             <select id="qbFilterTopic"><option value="">All topics</option></select>
           </div>
-          <div class="qb-field">
-            <label for="qbFilterStatus">Status</label>
-            <select id="qbFilterStatus">
-              <option value="">All statuses</option>
-              <option value="draft">Draft</option>
-              <option value="pending">Pending</option>
-              <option value="approved">Approved</option>
-              <option value="rejected">Rejected</option>
-            </select>
-          </div>
-          <div class="qb-field">
-            <label for="qbFilterOwnership">Showing</label>
-            <select id="qbFilterOwnership">
-              <option value="all">All visible</option>
-              <option value="private">Only mine</option>
-              <option value="institution">Shared</option>
-              <option value="archived">Archived</option>
-            </select>
-          </div>
+          <label class="qb-checkbox" for="qbIncludeArchived">
+            <input type="checkbox" id="qbIncludeArchived" />
+            Include archived
+          </label>
         </div>
         <div class="qb-actions">
           <button id="qbRefreshBtn" class="qb-btn qb-btn-secondary" type="button">
@@ -179,16 +151,13 @@
             <tr>
               <th style="width: 34%;">Question</th>
               <th>Type</th>
-              <th>Category / Topic</th>
+              <th>Section / Topic</th>
               <th>Pts</th>
-              <th>Status</th>
-              <th>Sharing</th>
-              <th>Versions</th>
               <th style="width: 22%;">Actions</th>
             </tr>
           </thead>
           <tbody id="qbListBody">
-            <tr><td colspan="8" class="qb-empty">Loading questions...</td></tr>
+            <tr><td colspan="5" class="qb-empty">Loading questions...</td></tr>
           </tbody>
         </table>
       </div>
@@ -239,11 +208,11 @@
           <input type="text" id="qbCorrectAnswer" />
         </div>
         <div class="qb-field">
-          <label for="qbCategory">Category</label>
+          <label for="qbCategory">Section</label>
           <select id="qbCategory"><option value="">None</option></select>
         </div>
         <div class="qb-field">
-          <label for="qbSubject">Subject</label>
+          <label for="qbSubject">Unit / Week</label>
           <select id="qbSubject"><option value="">None</option></select>
         </div>
         <div class="qb-field">
@@ -270,20 +239,6 @@
     <div class="qb-modal-footer">
       <button id="qbEditorCancel" class="qb-btn qb-btn-secondary" type="button">Cancel</button>
       <button id="qbEditorSave" class="qb-btn qb-btn-primary" type="button">Save Question</button>
-    </div>
-  </div>
-</div>
-
-<!-- Versions modal -->
-<div id="qbVersionsModal" class="qb-modal-overlay">
-  <div class="qb-modal">
-    <div class="qb-modal-header">
-      <h3 id="qbVersionsTitle">Version History</h3>
-      <button id="qbVersionsClose" class="qb-btn qb-btn-secondary qb-btn-sm" type="button">&times;</button>
-    </div>
-    <div class="qb-modal-body" id="qbVersionsBody"></div>
-    <div class="qb-modal-footer">
-      <button id="qbVersionsDone" class="qb-btn qb-btn-secondary" type="button">Close</button>
     </div>
   </div>
 </div>
@@ -327,9 +282,8 @@
         <label for="qbImportFile">CSV file</label>
         <input id="qbImportFile" type="file" accept=".csv,text/csv" />
         <p class="qb-import-hint">
-          Up to 500 questions per file. Questions are added as private drafts
-          and must be submitted for approval before they can be shared. Rows
-          whose text already exists in your bank are skipped.
+          Up to 500 questions per file. Questions are added directly to your
+          private bank. Rows whose text already exists in your bank are skipped.
         </p>
       </div>
       <div class="qb-import-field">

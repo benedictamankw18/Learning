@@ -246,9 +246,9 @@ class QuizRepository
     /**
      * Get questions for a quiz
      */
-    public function getQuestions(int $quizId): array
+    public function getQuestions(int $quizId, ?int $ownerUserId = null): array
     {
-        $stmt = $this->db->prepare("
+        $sql = "
             SELECT
                 qn.question_id,
                 qn.question_text,
@@ -260,17 +260,24 @@ class QuizRepository
                 qn.correct_answer,
                 l.position AS order_index,
                 qn.current_version_id,
-                qn.visibility,
-                qn.approval_status,
+                qn.owner_user_id,
                 qn.created_at,
                 qn.updated_at
             FROM quiz_question_links l
             INNER JOIN questions qn ON qn.question_id = l.question_id
             WHERE l.quiz_id = :quiz_id
-            ORDER BY l.position ASC, qn.question_id ASC
-        ");
+        ";
+        $params = ['quiz_id' => $quizId];
 
-        $stmt->execute(['quiz_id' => $quizId]);
+        if ($ownerUserId !== null) {
+            $sql .= " AND qn.owner_user_id = :owner_user_id";
+            $params['owner_user_id'] = $ownerUserId;
+        }
+
+        $sql .= " ORDER BY l.position ASC, qn.question_id ASC";
+        $stmt = $this->db->prepare($sql);
+
+        $stmt->execute($params);
         $questions = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
         if (!$questions) {
@@ -653,8 +660,8 @@ class QuizRepository
      * Resolve the exact content each question was served with in an attempt.
      *
      * Priority:
-     *  1. Phase 1C immutable version (question_version_id), which protects a
-     *     submitted attempt from later bank edits, including approval resets;
+     *  1. Immutable version (question_version_id), which protects a submitted
+     *     attempt from later edits to the bank question;
      *  2. Phase 1B JSON snapshot (question_snapshot);
      *  3. nothing (caller falls back to live bank content).
      *
@@ -823,17 +830,18 @@ class QuizRepository
     }
 
     /**
-     * Add a question to the bank and link it to a quiz.
+     * Add a question to the authenticated teacher's bank and link it to a quiz.
      *
      * The bank row is created once; the link carries the quiz-specific order.
-     * `owner_user_id` follows the quiz's teacher, so a question authored for a
-     * course with no teacher is institution-owned.
+     * Ownership always follows the acting teacher and is never taken from the
+     * quiz's course metadata.
      */
     public function addQuestion(array $data): int
     {
         $quizId = (int) ($data['quiz_id'] ?? 0);
-        if ($quizId <= 0) {
-            throw new \InvalidArgumentException('quiz_id is required');
+        $ownerUserId = (int) ($data['actor_user_id'] ?? 0);
+        if ($quizId <= 0 || $ownerUserId <= 0) {
+            throw new \InvalidArgumentException('quiz_id and actor_user_id are required');
         }
 
         $context = $this->getQuizQuestionContext($quizId);
@@ -876,7 +884,7 @@ class QuizRepository
 
             $stmt->execute([
                 'institution_id' => $context['institution_id'],
-                'owner_user_id' => $context['owner_user_id'],
+                'owner_user_id' => $ownerUserId,
                 'question_text' => $data['question_text'],
                 'image_question' => $imageQuestion,
                 'question_type' => $data['question_type'],
@@ -926,12 +934,12 @@ class QuizRepository
     }
 
     /**
-     * Link an existing visible bank question to a quiz.
+     * Link one of the teacher's own bank questions to a quiz.
      *
      * This never changes bank content or ownership; it only adds the quiz
-     * link. Visibility is authorized by the controller before calling here.
+     * link. The controller authorizes the acting teacher before calling here.
      */
-    public function linkExistingQuestion(int $quizId, int $questionId): bool
+    public function linkExistingQuestion(int $quizId, int $questionId, int $ownerUserId): bool
     {
         $context = $this->getQuizQuestionContext($quizId);
         if ($context === null) {
@@ -943,11 +951,13 @@ class QuizRepository
             FROM questions
             WHERE question_id = :question_id
               AND institution_id = :institution_id
+              AND owner_user_id = :owner_user_id
               AND is_archived = 0
         ");
         $stmt->execute([
             'question_id' => $questionId,
             'institution_id' => $context['institution_id'],
+            'owner_user_id' => $ownerUserId,
         ]);
         if (!$stmt->fetchColumn()) {
             return false;
@@ -1084,15 +1094,15 @@ class QuizRepository
      * Append pre-validated questions to a quiz.
      *
      * Duplicate question text is skipped so re-importing the same file is
-     * idempotent. A matching row that already exists in the teacher's bank is
+     * idempotent. A matching row already in the same teacher's private bank is
      * linked instead of duplicated, and only genuinely new text creates a bank
-     * row. Each insert runs inside a savepoint, so one bad row cannot discard
-     * the rows that already succeeded.
+     * row. Another teacher's row is never reused. Each insert runs inside a
+     * savepoint, so one bad row cannot discard the rows that already succeeded.
      *
      * @param array<int,array{row:int,question:array<string,mixed>}> $rows
      * @return array{imported:int,skipped:int,failed:int,results:array<int,array<string,mixed>>}
      */
-    public function importQuestions(int $quizId, array $rows): array
+    public function importQuestions(int $quizId, array $rows, int $ownerUserId): array
     {
         $context = $this->getQuizQuestionContext($quizId);
         if ($context === null) {
@@ -1125,7 +1135,7 @@ class QuizRepository
                 $existing[$this->normalizeQuestionTextKey((string) $text)] = true;
             }
 
-            $findExisting = $this->prepareBankTextLookup($context);
+            $findExisting = $this->prepareBankTextLookup($context, $ownerUserId);
 
             foreach ($rows as $index => $row) {
                 $rowNumber = (int) ($row['row'] ?? 0);
@@ -1159,23 +1169,21 @@ class QuizRepository
                 try {
                     $params = [
                         'institution_id' => $context['institution_id'],
+                        'owner_user_id' => $ownerUserId,
                         'question_text' => trim($text),
                     ];
-                    if ($context['owner_user_id'] !== null) {
-                        $params['owner_user_id'] = $context['owner_user_id'];
-                    }
                     $findExisting->execute($params);
                     $bankQuestionId = $findExisting->fetchColumn();
 
                     if ($bankQuestionId !== false) {
-                        // Reuse the existing bank row: the question text is
-                        // already maintained by this teacher (or the
-                        // institution), so importing it only adds a link.
+                        // Reuse the teacher's existing private bank row; the
+                        // import only adds a quiz link.
                         $this->linkQuestionToQuiz($quizId, (int) $bankQuestionId, $nextOrder);
-                        $message = 'Question imported from the existing bank.';
+                        $message = 'Question imported from your bank.';
                     } else {
                         $question['quiz_id'] = $quizId;
                         $question['order_index'] = $nextOrder;
+                        $question['actor_user_id'] = $ownerUserId;
                         $this->addQuestion($question);
                         $message = 'Question imported.';
                     }
@@ -1224,25 +1232,18 @@ class QuizRepository
     /**
      * Lookup used by CSV import to find a bank row the importer may reuse.
      *
-     * Reuse is limited to questions the teacher can actually see: their own
-     * rows, or rows shared with the institution that an administrator has
-     * approved. Drafts, pending submissions, rejected and archived rows are
-     * never borrowed, so an import cannot silently depend on unvetted content.
+     * Only unarchived rows owned by the acting teacher are reusable. There is
+     * no institution-wide sharing branch and no approval state to consult.
      */
-    private function prepareBankTextLookup(array $context): \PDOStatement
+    private function prepareBankTextLookup(array $context, int $ownerUserId): \PDOStatement
     {
-        $shared = "(visibility = 'institution' AND approval_status = 'approved')";
-        $visibility = $context['owner_user_id'] !== null
-            ? "(owner_user_id = :owner_user_id OR {$shared})"
-            : $shared;
-
         $sql = "
             SELECT question_id
             FROM questions
             WHERE institution_id = :institution_id
+              AND owner_user_id = :owner_user_id
               AND is_archived = 0
               AND TRIM(question_text) = :question_text
-              AND {$visibility}
             ORDER BY question_id ASC
             LIMIT 1
         ";
@@ -1256,12 +1257,12 @@ class QuizRepository
     }
 
     /**
-     * Update a bank question.
+     * Update a teacher-owned bank question.
      *
-     * Bank content is shared, so edits here are visible everywhere the
-     * question is used. Quiz-scoped fields are different: when `$quizId` is
-     * given, `order_index` moves this quiz's link and `points` becomes the
-     * per-quiz override instead of changing the bank default.
+     * The controller has already verified ownership. Quiz-scoped fields remain
+     * different: when `$quizId` is given, `order_index` moves this quiz's link
+     * and `points` becomes the per-quiz override instead of changing the bank
+     * default.
      */
     public function updateQuestion(int $questionId, array $data, ?int $quizId = null): bool
     {
@@ -1356,12 +1357,6 @@ class QuizRepository
                 $bankRepo = new QuestionBankRepository();
                 $actorId = isset($data['actor_user_id']) ? (int) $data['actor_user_id'] : null;
                 $bankRepo->createVersion($questionId, $actorId);
-
-                // A non-admin edit to a shared question returns it to review
-                // so the institution copy is not silently changed.
-                if (!empty($data['reset_approval_on_edit'])) {
-                    $bankRepo->submitForApproval($questionId, (int) ($actorId ?? 0));
-                }
             }
 
             if ($ownsTransaction) {

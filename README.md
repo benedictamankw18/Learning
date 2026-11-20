@@ -71,6 +71,7 @@ Paginated endpoints add a `pagination` object with `total`, `per_page`, `current
 - Course content, sections, materials, enrollments, and lesson plans
 - Assignments and submissions with file uploads
 - Assessments, assessment categories, quizzes, and quiz submissions
+- Teacher-private question bank with teacher-owned Sections/Topics and CSV import/export
 - Attendance tracking
 - Ghana WAEC grading scale support (A1–F9), grade categories, grade scales, and grade reports
 - Announcements, events, notifications, direct messages, and chat rooms
@@ -117,8 +118,12 @@ Learning/
 ├── .gitignore                    # Keeps secrets, uploads, logs, and generated files out of Git
 ├── db/
 │   └── init/
-│       ├── 01-lms.sql            # Schema (71 tables)
-│       └── 02-insert.sql         # Seed data (roles, permissions, users, demo records)
+│       ├── 01-lms.sql            # Schema (71 core tables)
+│       ├── 02-insert.sql         # Seed data (roles, permissions, users, demo records)
+│       ├── 03-refresh-tokens.sql # Refresh-token storage
+│       ├── 04-quiz-submission-questions.sql # Per-attempt question order
+│       ├── 05-question-bank.sql  # Teacher-private question bank tables
+│       └── 06-question-bank-metadata.sql # Taxonomy and immutable versions
 ├── lms-api/
 │   ├── public/                   # Web root: index.php (front controller), router.php, .htaccess
 │   ├── src/
@@ -229,9 +234,23 @@ On first start, MariaDB runs everything in `db/init` against an empty data direc
 mysql -u root -p -e "CREATE DATABASE IF NOT EXISTS lms CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
 mysql -u root -p lms < db/init/01-lms.sql
 mysql -u root -p lms < db/init/02-insert.sql
+mysql -u root -p lms < db/init/03-refresh-tokens.sql
+mysql -u root -p lms < db/init/04-quiz-submission-questions.sql
+mysql -u root -p lms < db/init/05-question-bank.sql
+mysql -u root -p lms < db/init/06-question-bank-metadata.sql
 ```
 
-`02-insert.sql` seeds roles, permissions, a platform super admin, and demo institution data. Review it before importing into any shared environment.
+Run the files in `db/init` in filename order. `02-insert.sql` seeds roles, permissions, a
+platform super admin, and demo institution data. Review it before importing into any shared
+environment. `05-question-bank.sql` and `06-question-bank-metadata.sql` define the
+teacher-private question bank; after initialization, run the one-time ownership migration:
+
+```bash
+php lms-api/migrations/scope_question_bank_to_teachers.php
+```
+
+It makes taxonomy owner-scoped and assigns legacy ownerless questions to `benedict.teacher`
+(user 11); already-owned rows keep their owner and no API changes ownership later.
 
 > **Do not use the seeded super-admin outside local development.** Its password hash is committed to this repository, so the password must be treated as known. Provision or rotate the account with:
 >
@@ -363,12 +382,17 @@ Only `APP_ENV` and `API_BASE_URL` are written to `assets/js/env.js` by the gener
 
 ## Database
 
-- **Schema:** `db/init/01-lms.sql` — creates 71 tables with `CREATE TABLE IF NOT EXISTS`, foreign keys, and indexes.
+- **Schema:** `db/init/01-lms.sql` — creates 71 core tables with `CREATE TABLE IF NOT EXISTS`, foreign keys, and indexes.
 - **Seed data:** `db/init/02-insert.sql` — roles, permissions, users, and demo records.
+- **Question bank:** `db/init/05-question-bank.sql` and `db/init/06-question-bank-metadata.sql` define the teacher-private bank; `lms-api/migrations/scope_question_bank_to_teachers.php` is the one-time ownership normalization (legacy ownerless rows go to user 11). No API reassigns ownership.
 - **Migrations:** `lms-api/migrations/*.php` — standalone scripts. They are not run automatically; run them individually from `lms-api/`:
 
 ```bash
 php migrations/add_is_published_to_events.php
+php migrations/create_question_bank.php
+php migrations/add_question_snapshot_to_quiz_submission_questions.php
+php migrations/add_question_bank_metadata.php
+php migrations/scope_question_bank_to_teachers.php
 ```
 
 Most migrations check whether a column or table already exists and skip safely when it does.
@@ -446,6 +470,7 @@ Representative paths; see `src/Routes/api.php` for the complete list.
 | Assignments | `/assignments`, `/assignment-submissions`, `/submissions/{submissionId}/grade` |
 | Assessments | `/assessments`, `/assessment-categories`, `/results`, `/courses/{courseId}/students/{studentId}/final-score` |
 | Quizzes | `/quizzes`, `/quiz-questions`, `/quiz-submissions` |
+| Question bank | `/question-bank/questions`, `/question-bank/categories`, `/question-bank/topics` (teacher-owned) |
 | Grading | `/grade-scales`, `/grade-categories`, `/grade-reports` |
 | Communication | `/messages`, `/notifications`, `/chat`, `/announcements`, `/events` |
 | Reports | `/report-schedules` |
@@ -471,9 +496,9 @@ Representative paths; see `src/Routes/api.php` for the complete list.
 
 | Role | Scope |
 | --- | --- |
-| `super_admin` | Platform-wide: institutions, platform users, roles, subscriptions, system settings, audit logs |
-| `admin` | Single institution: students, teachers, classes, subjects, programs, attendance, reports, settings |
-| `teacher` | Assigned classes and subjects: attendance, assignments, assessments, quizzes, materials, grades |
+| `super_admin` | Platform-wide: institutions, platform users, roles, subscriptions, system settings, audit logs; no question-bank authoring |
+| `admin` | Single institution: students, teachers, classes, subjects, programs, attendance, reports, settings; quiz assignment, scheduling, and results only |
+| `teacher` | Assigned classes and subjects: attendance, assignments, assessments, quizzes, private question bank, materials, grades |
 | `student` | Own classes, materials, assignments, assessments, attendance, and grades |
 | `parent` | Linked children: performance, attendance, assignments, schedules, announcements |
 
@@ -628,7 +653,9 @@ Detailed deployment and operations procedures live in [`docs/deployment/`](docs/
 | [`operations.md`](docs/deployment/operations.md) | Backups, restores, migrations, scheduler, monitoring, upgrades, rollback |
 
 The Quick Start and Local Development sections above remain the short path; the deployment
-guides are the detailed procedures.
+guides are the detailed procedures. The teacher-private bank and its CSV workflow are
+documented in [`docs/assessment/question-bank.md`](docs/assessment/question-bank.md) and
+[`docs/assessment/question-import-export.md`](docs/assessment/question-import-export.md).
 
 > **Before exposing the system to real users:** set `APP_ENV=production`, `APP_DEBUG=false`, use
 > a unique `JWT_SECRET` of at least 32 characters, replace `ALLOWED_ORIGINS=*` with an explicit

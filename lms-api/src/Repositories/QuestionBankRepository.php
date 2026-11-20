@@ -8,10 +8,11 @@ use App\Utils\QuestionVersion;
 use PDO;
 
 /**
- * Phase 1C question bank metadata, taxonomy, approval and versions.
+ * Teacher-private question bank taxonomy and immutable versions.
  *
  * Quiz authoring still goes through QuizRepository; this repository owns the
- * bank-wide operations and the immutable version rows used by attempts.
+ * bank-wide operations and the immutable version rows used by attempts. Every
+ * question lookup is scoped to the authenticated teacher's own rows.
  */
 class QuestionBankRepository
 {
@@ -23,81 +24,83 @@ class QuestionBankRepository
     }
 
     /**
-     * SQL fragment and parameters limiting questions visible to an actor.
+     * SQL fragment and parameters limiting questions to the actor's own bank.
      *
-     * Teachers see their own questions and approved institution questions.
-     * Admins see every question in their institution; super admins see all.
+     * There is deliberately no role or institution sharing branch: a bank is
+     * private to one teacher, and ownership cannot be reassigned through any
+     * API. The institution check only denies actors without tenant scope.
      *
      * @return array{0:string,1:array<string,mixed>}
      */
-    public function visibilityClause(array $actor, string $alias = 'q'): array
+    public function ownerClause(array $actor, string $alias = 'q'): array
     {
-        if (AccessControl::isSuperAdmin($actor)) {
-            return ['1=1', []];
-        }
-
         $institutionId = AccessControl::institutionId($actor);
         if ($institutionId <= 0) {
             return ['1=0', []];
         }
 
-        if (AccessControl::isAdmin($actor)) {
-            return ["{$alias}.institution_id = :institution_id", ['institution_id' => $institutionId]];
-        }
+        $prefix = $alias !== '' ? $alias . '.' : '';
 
         return [
-            "{$alias}.institution_id = :institution_id
-             AND (
-                {$alias}.owner_user_id = :owner_user_id
-                OR ({$alias}.visibility = 'institution'
-                    AND {$alias}.approval_status = 'approved'
-                    AND {$alias}.is_archived = 0)
-             )",
+            "{$prefix}owner_user_id = :owner_user_id AND {$prefix}institution_id = :institution_id",
             [
-                'institution_id' => $institutionId,
                 'owner_user_id' => (int) ($actor['user_id'] ?? 0),
+                'institution_id' => $institutionId,
             ],
         ];
     }
 
     /* ------------------------------------------------------------------ */
-    /* Categories                                                          */
+    /* Sections (categories)                                               */
     /* ------------------------------------------------------------------ */
 
-    public function listCategories(int $institutionId): array
+    public function listCategories(int $institutionId, int $ownerId): array
     {
         $stmt = $this->db->prepare("
             SELECT c.*, p.name AS parent_name
             FROM question_categories c
-            LEFT JOIN question_categories p ON p.category_id = c.parent_id
-            WHERE c.institution_id = :institution_id
+            LEFT JOIN question_categories p
+                ON p.category_id = c.parent_id
+                AND p.institution_id = c.institution_id
+                AND p.owner_user_id = c.owner_user_id
+            WHERE c.institution_id = :institution_id AND c.owner_user_id = :owner_user_id
             ORDER BY c.parent_id ASC, c.name ASC
         ");
-        $stmt->execute(['institution_id' => $institutionId]);
+        $stmt->execute([
+            'institution_id' => $institutionId,
+            'owner_user_id' => $ownerId,
+        ]);
 
         return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
-    public function findCategory(int $categoryId, int $institutionId): ?array
+    public function findCategory(int $categoryId, int $institutionId, int $ownerId): ?array
     {
         $stmt = $this->db->prepare("
             SELECT * FROM question_categories
-            WHERE category_id = :id AND institution_id = :institution_id
+            WHERE category_id = :id
+              AND institution_id = :institution_id
+              AND owner_user_id = :owner_user_id
         ");
-        $stmt->execute(['id' => $categoryId, 'institution_id' => $institutionId]);
+        $stmt->execute([
+            'id' => $categoryId,
+            'institution_id' => $institutionId,
+            'owner_user_id' => $ownerId,
+        ]);
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
 
         return $row ?: null;
     }
 
-    public function createCategory(int $institutionId, string $name, ?int $parentId): int
+    public function createCategory(int $institutionId, int $ownerId, string $name, ?int $parentId): int
     {
         $stmt = $this->db->prepare("
-            INSERT INTO question_categories (institution_id, name, parent_id)
-            VALUES (:institution_id, :name, :parent_id)
+            INSERT INTO question_categories (institution_id, owner_user_id, name, parent_id)
+            VALUES (:institution_id, :owner_user_id, :name, :parent_id)
         ");
         $stmt->execute([
             'institution_id' => $institutionId,
+            'owner_user_id' => $ownerId,
             'name' => trim($name),
             'parent_id' => $parentId,
         ]);
@@ -105,41 +108,61 @@ class QuestionBankRepository
         return (int) $this->db->lastInsertId();
     }
 
-    public function updateCategory(int $categoryId, int $institutionId, string $name, ?int $parentId): bool
-    {
+    public function updateCategory(
+        int $categoryId,
+        int $institutionId,
+        int $ownerId,
+        string $name,
+        ?int $parentId
+    ): bool {
         $stmt = $this->db->prepare("
             UPDATE question_categories
             SET name = :name, parent_id = :parent_id
-            WHERE category_id = :id AND institution_id = :institution_id
+            WHERE category_id = :id
+              AND institution_id = :institution_id
+              AND owner_user_id = :owner_user_id
         ");
         $stmt->execute([
             'name' => trim($name),
             'parent_id' => $parentId,
             'id' => $categoryId,
             'institution_id' => $institutionId,
+            'owner_user_id' => $ownerId,
         ]);
 
         return $stmt->rowCount() > 0;
     }
 
-    public function deleteCategory(int $categoryId, int $institutionId): bool
+    public function deleteCategory(int $categoryId, int $institutionId, int $ownerId): bool
     {
         $stmt = $this->db->prepare("
             DELETE FROM question_categories
-            WHERE category_id = :id AND institution_id = :institution_id
+            WHERE category_id = :id
+              AND institution_id = :institution_id
+              AND owner_user_id = :owner_user_id
         ");
-        $stmt->execute(['id' => $categoryId, 'institution_id' => $institutionId]);
+        $stmt->execute([
+            'id' => $categoryId,
+            'institution_id' => $institutionId,
+            'owner_user_id' => $ownerId,
+        ]);
 
         return $stmt->rowCount() > 0;
     }
 
-    public function categoryInUse(int $categoryId, int $institutionId): bool
+    public function categoryInUse(int $categoryId, int $institutionId, int $ownerId): bool
     {
         $stmt = $this->db->prepare("
             SELECT COUNT(*) FROM questions
-            WHERE category_id = :id AND institution_id = :institution_id
+            WHERE category_id = :id
+              AND institution_id = :institution_id
+              AND owner_user_id = :owner_user_id
         ");
-        $stmt->execute(['id' => $categoryId, 'institution_id' => $institutionId]);
+        $stmt->execute([
+            'id' => $categoryId,
+            'institution_id' => $institutionId,
+            'owner_user_id' => $ownerId,
+        ]);
 
         return (int) $stmt->fetchColumn() > 0;
     }
@@ -148,15 +171,18 @@ class QuestionBankRepository
     /* Topics                                                              */
     /* ------------------------------------------------------------------ */
 
-    public function listTopics(int $institutionId, ?int $subjectId): array
+    public function listTopics(int $institutionId, ?int $subjectId, int $ownerId): array
     {
         $sql = "
             SELECT t.*, s.subject_name
             FROM question_topics t
             LEFT JOIN subjects s ON s.subject_id = t.subject_id
-            WHERE t.institution_id = :institution_id
+            WHERE t.institution_id = :institution_id AND t.owner_user_id = :owner_user_id
         ";
-        $params = ['institution_id' => $institutionId];
+        $params = [
+            'institution_id' => $institutionId,
+            'owner_user_id' => $ownerId,
+        ];
 
         if ($subjectId !== null) {
             $sql .= " AND (t.subject_id = :subject_id OR t.subject_id IS NULL)";
@@ -170,26 +196,33 @@ class QuestionBankRepository
         return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
-    public function findTopic(int $topicId, int $institutionId): ?array
+    public function findTopic(int $topicId, int $institutionId, int $ownerId): ?array
     {
         $stmt = $this->db->prepare("
             SELECT * FROM question_topics
-            WHERE topic_id = :id AND institution_id = :institution_id
+            WHERE topic_id = :id
+              AND institution_id = :institution_id
+              AND owner_user_id = :owner_user_id
         ");
-        $stmt->execute(['id' => $topicId, 'institution_id' => $institutionId]);
+        $stmt->execute([
+            'id' => $topicId,
+            'institution_id' => $institutionId,
+            'owner_user_id' => $ownerId,
+        ]);
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
 
         return $row ?: null;
     }
 
-    public function createTopic(int $institutionId, ?int $subjectId, string $name): int
+    public function createTopic(int $institutionId, int $ownerId, ?int $subjectId, string $name): int
     {
         $stmt = $this->db->prepare("
-            INSERT INTO question_topics (institution_id, subject_id, name)
-            VALUES (:institution_id, :subject_id, :name)
+            INSERT INTO question_topics (institution_id, owner_user_id, subject_id, name)
+            VALUES (:institution_id, :owner_user_id, :subject_id, :name)
         ");
         $stmt->execute([
             'institution_id' => $institutionId,
+            'owner_user_id' => $ownerId,
             'subject_id' => $subjectId,
             'name' => trim($name),
         ]);
@@ -197,41 +230,61 @@ class QuestionBankRepository
         return (int) $this->db->lastInsertId();
     }
 
-    public function updateTopic(int $topicId, int $institutionId, ?int $subjectId, string $name): bool
-    {
+    public function updateTopic(
+        int $topicId,
+        int $institutionId,
+        int $ownerId,
+        ?int $subjectId,
+        string $name
+    ): bool {
         $stmt = $this->db->prepare("
             UPDATE question_topics
             SET subject_id = :subject_id, name = :name
-            WHERE topic_id = :id AND institution_id = :institution_id
+            WHERE topic_id = :id
+              AND institution_id = :institution_id
+              AND owner_user_id = :owner_user_id
         ");
         $stmt->execute([
             'subject_id' => $subjectId,
             'name' => trim($name),
             'id' => $topicId,
             'institution_id' => $institutionId,
+            'owner_user_id' => $ownerId,
         ]);
 
         return $stmt->rowCount() > 0;
     }
 
-    public function deleteTopic(int $topicId, int $institutionId): bool
+    public function deleteTopic(int $topicId, int $institutionId, int $ownerId): bool
     {
         $stmt = $this->db->prepare("
             DELETE FROM question_topics
-            WHERE topic_id = :id AND institution_id = :institution_id
+            WHERE topic_id = :id
+              AND institution_id = :institution_id
+              AND owner_user_id = :owner_user_id
         ");
-        $stmt->execute(['id' => $topicId, 'institution_id' => $institutionId]);
+        $stmt->execute([
+            'id' => $topicId,
+            'institution_id' => $institutionId,
+            'owner_user_id' => $ownerId,
+        ]);
 
         return $stmt->rowCount() > 0;
     }
 
-    public function topicInUse(int $topicId, int $institutionId): bool
+    public function topicInUse(int $topicId, int $institutionId, int $ownerId): bool
     {
         $stmt = $this->db->prepare("
             SELECT COUNT(*) FROM questions
-            WHERE topic_id = :id AND institution_id = :institution_id
+            WHERE topic_id = :id
+              AND institution_id = :institution_id
+              AND owner_user_id = :owner_user_id
         ");
-        $stmt->execute(['id' => $topicId, 'institution_id' => $institutionId]);
+        $stmt->execute([
+            'id' => $topicId,
+            'institution_id' => $institutionId,
+            'owner_user_id' => $ownerId,
+        ]);
 
         return (int) $stmt->fetchColumn() > 0;
     }
@@ -257,7 +310,7 @@ class QuestionBankRepository
      */
     public function listQuestions(array $filters, array $actor, int $limit, int $offset): array
     {
-        [$visibility, $params] = $this->visibilityClause($actor);
+        [$ownerClause, $params] = $this->ownerClause($actor);
 
         $sql = "
             SELECT q.*, c.name AS category_name, t.name AS topic_name,
@@ -268,7 +321,7 @@ class QuestionBankRepository
             LEFT JOIN question_topics t ON t.topic_id = q.topic_id
             LEFT JOIN subjects s ON s.subject_id = q.subject_id
             LEFT JOIN users u ON u.user_id = q.owner_user_id
-            WHERE {$visibility}
+            WHERE {$ownerClause}
         ";
 
         foreach (['category_id', 'subject_id', 'topic_id'] as $field) {
@@ -277,16 +330,12 @@ class QuestionBankRepository
                 $params[$field] = (int) $filters[$field];
             }
         }
-        foreach (['visibility', 'approval_status'] as $field) {
-            if (!empty($filters[$field])) {
-                $sql .= " AND q.{$field} = :{$field}";
-                $params[$field] = (string) $filters[$field];
-            }
-        }
-        if (isset($filters['is_archived'])) {
+        if (!empty($filters['include_archived'])) {
+            // The teacher opted to see archived rows as well.
+        } elseif (isset($filters['is_archived'])) {
             $sql .= " AND q.is_archived = :is_archived";
             $params['is_archived'] = (int) ((bool) $filters['is_archived']);
-        } elseif (!AccessControl::isAdmin($actor) && !AccessControl::isSuperAdmin($actor)) {
+        } else {
             $sql .= " AND q.is_archived = 0";
         }
         if (!empty($filters['q'])) {
@@ -312,19 +361,21 @@ class QuestionBankRepository
      */
     public function countQuestions(array $filters, array $actor): int
     {
-        [$visibility, $params] = $this->visibilityClause($actor);
-        $sql = "SELECT COUNT(*) FROM questions q WHERE {$visibility}";
+        [$ownerClause, $params] = $this->ownerClause($actor);
+        $sql = "SELECT COUNT(*) FROM questions q WHERE {$ownerClause}";
 
-        foreach (['category_id', 'subject_id', 'topic_id', 'visibility', 'approval_status'] as $field) {
+        foreach (['category_id', 'subject_id', 'topic_id'] as $field) {
             if (isset($filters[$field]) && $filters[$field] !== '') {
                 $sql .= " AND q.{$field} = :{$field}";
                 $params[$field] = $filters[$field];
             }
         }
-        if (isset($filters['is_archived'])) {
+        if (!empty($filters['include_archived'])) {
+            // The teacher opted to see archived rows as well.
+        } elseif (isset($filters['is_archived'])) {
             $sql .= " AND q.is_archived = :is_archived";
             $params['is_archived'] = (int) ((bool) $filters['is_archived']);
-        } elseif (!AccessControl::isAdmin($actor) && !AccessControl::isSuperAdmin($actor)) {
+        } else {
             $sql .= " AND q.is_archived = 0";
         }
         if (!empty($filters['q'])) {
@@ -338,9 +389,9 @@ class QuestionBankRepository
         return (int) $stmt->fetchColumn();
     }
 
-    public function findVisibleQuestion(int $questionId, array $actor): ?array
+    public function findOwnedQuestion(int $questionId, array $actor): ?array
     {
-        [$visibility, $params] = $this->visibilityClause($actor);
+        [$ownerClause, $params] = $this->ownerClause($actor);
         $params['question_id'] = $questionId;
 
         $stmt = $this->db->prepare("
@@ -349,12 +400,26 @@ class QuestionBankRepository
             LEFT JOIN question_categories c ON c.category_id = q.category_id
             LEFT JOIN question_topics t ON t.topic_id = q.topic_id
             LEFT JOIN subjects s ON s.subject_id = q.subject_id
-            WHERE {$visibility} AND q.question_id = :question_id
+            WHERE {$ownerClause} AND q.question_id = :question_id
         ");
         $stmt->execute($params);
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$row) {
+            return null;
+        }
 
-        return $row ?: null;
+        // The editor loads current options from the owned question, not from
+        // immutable versions. Versions remain for attempt snapshots only.
+        $optionStmt = $this->db->prepare("
+            SELECT option_label, option_text, is_correct
+            FROM question_bank_options
+            WHERE question_id = :question_id
+            ORDER BY option_label ASC
+        ");
+        $optionStmt->execute(['question_id' => $questionId]);
+        $row['options'] = $optionStmt->fetchAll(PDO::FETCH_ASSOC);
+
+        return $row;
     }
 
     /**
@@ -365,7 +430,7 @@ class QuestionBankRepository
         $fields = [];
         $params = ['question_id' => $questionId];
 
-        foreach (['category_id', 'subject_id', 'topic_id', 'visibility'] as $field) {
+        foreach (['category_id', 'subject_id', 'topic_id'] as $field) {
             if (array_key_exists($field, $data)) {
                 $fields[] = "{$field} = :{$field}";
                 $params[$field] = $data[$field] === null || $data[$field] === '' ? null : (int) $data[$field];
@@ -384,149 +449,32 @@ class QuestionBankRepository
         return $stmt->execute($params);
     }
 
-    public function submitForApproval(int $questionId, int $actorId): bool
+    public function setArchived(int $questionId, bool $archived, array $actor): bool
     {
-        $stmt = $this->db->prepare("
-            UPDATE questions
-            SET approval_status = 'pending', visibility = 'private',
-                submitted_at = NOW(), updated_at = NOW()
-            WHERE question_id = :question_id
-        ");
-        $stmt->execute(['question_id' => $questionId]);
+        [$ownerClause, $params] = $this->ownerClause($actor, '');
+        $params['question_id'] = $questionId;
+        $params['archived'] = $archived ? 1 : 0;
 
-        return $stmt->rowCount() > 0;
-    }
-
-    public function approve(int $questionId, int $reviewerId, ?string $note): bool
-    {
-        $stmt = $this->db->prepare("
-            UPDATE questions
-            SET visibility = 'institution', approval_status = 'approved',
-                reviewed_by = :reviewer_id, reviewed_at = NOW(), review_note = :note,
-                updated_at = NOW()
-            WHERE question_id = :question_id
-        ");
-        $stmt->execute([
-            'question_id' => $questionId,
-            'reviewer_id' => $reviewerId,
-            'note' => $note,
-        ]);
-
-        return $stmt->rowCount() > 0;
-    }
-
-    public function reject(int $questionId, int $reviewerId, string $note): bool
-    {
-        $stmt = $this->db->prepare("
-            UPDATE questions
-            SET visibility = 'private', approval_status = 'rejected',
-                reviewed_by = :reviewer_id, reviewed_at = NOW(), review_note = :note,
-                updated_at = NOW()
-            WHERE question_id = :question_id
-        ");
-        $stmt->execute([
-            'question_id' => $questionId,
-            'reviewer_id' => $reviewerId,
-            'note' => $note,
-        ]);
-
-        return $stmt->rowCount() > 0;
-    }
-
-    public function setArchived(int $questionId, bool $archived): bool
-    {
         $stmt = $this->db->prepare("
             UPDATE questions SET is_archived = :archived, updated_at = NOW()
-            WHERE question_id = :question_id
+            WHERE {$ownerClause} AND question_id = :question_id
         ");
-        $stmt->execute([
-            'question_id' => $questionId,
-            'archived' => $archived ? 1 : 0,
-        ]);
+        $stmt->execute($params);
 
         return $stmt->rowCount() > 0;
     }
 
     /**
-     * Copy an institution question into the actor's private bank.
-     *
-     * Ownership and versions are new; the original row is never changed.
-     */
-    public function fork(int $questionId, array $actor): ?int
-    {
-        $source = $this->db->prepare("SELECT * FROM questions WHERE question_id = :id");
-        $source->execute(['id' => $questionId]);
-        $question = $source->fetch(PDO::FETCH_ASSOC);
-        if (!$question) {
-            return null;
-        }
-
-        $options = $this->db->prepare("
-            SELECT option_label, option_text, is_correct
-            FROM question_bank_options
-            WHERE question_id = :id
-            ORDER BY option_label ASC
-        ");
-        $options->execute(['id' => $questionId]);
-
-        $insert = $this->db->prepare("
-            INSERT INTO questions (
-                institution_id, owner_user_id, question_text, image_question,
-                question_type, points, difficulty, explanation, correct_answer,
-                is_archived, category_id, subject_id, topic_id, visibility,
-                approval_status, forked_from_id
-            ) VALUES (
-                :institution_id, :owner_user_id, :question_text, :image_question,
-                :question_type, :points, :difficulty, :explanation, :correct_answer,
-                0, :category_id, :subject_id, :topic_id, 'private', 'draft', :forked_from_id
-            )
-        ");
-        $insert->execute([
-            'institution_id' => (int) $question['institution_id'],
-            'owner_user_id' => (int) ($actor['user_id'] ?? 0),
-            'question_text' => $question['question_text'],
-            'image_question' => $question['image_question'],
-            'question_type' => $question['question_type'],
-            'points' => $question['points'],
-            'difficulty' => $question['difficulty'],
-            'explanation' => $question['explanation'],
-            'correct_answer' => $question['correct_answer'],
-            'category_id' => $question['category_id'],
-            'subject_id' => $question['subject_id'],
-            'topic_id' => $question['topic_id'],
-            'forked_from_id' => $questionId,
-        ]);
-        $newId = (int) $this->db->lastInsertId();
-
-        $insertOption = $this->db->prepare("
-            INSERT INTO question_bank_options (question_id, option_label, option_text, is_correct)
-            VALUES (:question_id, :option_label, :option_text, :is_correct)
-        ");
-        foreach ($options->fetchAll(PDO::FETCH_ASSOC) as $option) {
-            $insertOption->execute([
-                'question_id' => $newId,
-                'option_label' => $option['option_label'],
-                'option_text' => $option['option_text'],
-                'is_correct' => $option['is_correct'],
-            ]);
-        }
-
-        $this->createVersion($newId, (int) ($actor['user_id'] ?? 0));
-
-        return $newId;
-    }
-
-    /**
-     * Rows for CSV export, including options and only what the actor may see.
+     * Rows for CSV export, including options and only the teacher's own rows.
      *
      * @param array<string,mixed> $filters
      * @return array<int,array<string,mixed>>
      */
     public function questionsForExport(array $filters, array $actor): array
     {
-        [$visibility, $params] = $this->visibilityClause($actor);
+        [$ownerClause, $params] = $this->ownerClause($actor);
 
-        $sql = "SELECT q.* FROM questions q WHERE {$visibility}";
+        $sql = "SELECT q.* FROM questions q WHERE {$ownerClause}";
 
         foreach (['category_id', 'subject_id', 'topic_id'] as $field) {
             if (isset($filters[$field]) && (int) $filters[$field] > 0) {
@@ -534,16 +482,12 @@ class QuestionBankRepository
                 $params[$field] = (int) $filters[$field];
             }
         }
-        foreach (['visibility', 'approval_status'] as $field) {
-            if (!empty($filters[$field])) {
-                $sql .= " AND q.{$field} = :{$field}";
-                $params[$field] = (string) $filters[$field];
-            }
-        }
-        if (isset($filters['is_archived'])) {
+        if (!empty($filters['include_archived'])) {
+            // The teacher opted to see archived rows as well.
+        } elseif (isset($filters['is_archived'])) {
             $sql .= " AND q.is_archived = :is_archived";
             $params['is_archived'] = (int) ((bool) $filters['is_archived']);
-        } elseif (!AccessControl::isAdmin($actor) && !AccessControl::isSuperAdmin($actor)) {
+        } else {
             $sql .= " AND q.is_archived = 0";
         }
         if (!empty($filters['q'])) {
@@ -575,24 +519,23 @@ class QuestionBankRepository
     }
 
     /**
-     * Append prepared CSV rows to the bank.
+     * Append prepared CSV rows to the teacher's private bank.
      *
-     * Duplicate text (among questions the actor can already see) is skipped.
-     * Every created question stays private/draft and gets its first immutable
-     * version through createQuestion(), so imported content follows the same
-     * approval path as manually authored bank questions.
+     * Duplicate text in the teacher's own bank is skipped. Every created row
+     * belongs to the actor and gets its first immutable version through
+     * createQuestion(), exactly like a manually authored bank question.
      *
      * @param array<int,array{row:int,question:array<string,mixed>}> $prepared
      * @return array{imported:int,skipped:int,failed:int,results:array<int,array<string,mixed>>}
      */
     public function importQuestions(array $prepared, array $actor, int $institutionId): array
     {
-        [$visibility, $visibilityParams] = $this->visibilityClause($actor);
+        [$ownerClause, $ownerParams] = $this->ownerClause($actor);
 
         $findExisting = $this->db->prepare("
             SELECT question_id
             FROM questions q
-            WHERE {$visibility} AND TRIM(q.question_text) = :question_text
+            WHERE {$ownerClause} AND TRIM(q.question_text) = :question_text
             ORDER BY q.question_id ASC
             LIMIT 1
         ");
@@ -623,7 +566,7 @@ class QuestionBankRepository
                     continue;
                 }
 
-                $lookupParams = $visibilityParams;
+                $lookupParams = $ownerParams;
                 $lookupParams['question_text'] = $text;
                 $findExisting->execute($lookupParams);
                 if ($findExisting->fetchColumn() !== false) {
@@ -631,7 +574,7 @@ class QuestionBankRepository
                     $results[] = [
                         'row' => $rowNumber,
                         'status' => 'skipped',
-                        'message' => 'A question with this text already exists in the question bank.',
+                        'message' => 'A question with this text already exists in your question bank.',
                     ];
                     continue;
                 }
@@ -644,7 +587,7 @@ class QuestionBankRepository
                     $results[] = [
                         'row' => $rowNumber,
                         'status' => 'imported',
-                        'message' => 'Question imported as a private draft.',
+                        'message' => 'Question imported into your private bank.',
                     ];
                     $this->db->exec('RELEASE SAVEPOINT ' . $savepoint);
                 } catch (\Throwable $e) {
@@ -678,7 +621,7 @@ class QuestionBankRepository
     }
 
     /**
-     * Create a private question directly in the bank.
+     * Create a question in the authenticated teacher's private bank.
      *
      * @param array<string,mixed> $data
      */
@@ -688,11 +631,11 @@ class QuestionBankRepository
             INSERT INTO questions (
                 institution_id, owner_user_id, question_text, image_question,
                 question_type, points, difficulty, explanation, correct_answer,
-                is_archived, category_id, subject_id, topic_id, visibility, approval_status
+                is_archived, category_id, subject_id, topic_id
             ) VALUES (
                 :institution_id, :owner_user_id, :question_text, :image_question,
                 :question_type, :points, :difficulty, :explanation, :correct_answer,
-                0, :category_id, :subject_id, :topic_id, 'private', 'draft'
+                0, :category_id, :subject_id, :topic_id
             )
         ");
         $stmt->execute([

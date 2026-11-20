@@ -784,7 +784,7 @@
       return;
     }
     if (!rows.length) {
-      state.els.bankPickerList.innerHTML = '<div class="tqq-empty">No visible bank questions found.</div>';
+      state.els.bankPickerList.innerHTML = '<div class="tqq-empty">No questions in your private bank found.</div>';
       return;
     }
     const linkedIds = new Set(state.questions.map((q) => String(q.id)));
@@ -792,7 +792,7 @@
       const already = linkedIds.has(String(q.question_id));
       const text = String(q.question_text || "");
       const preview = text.length > 130 ? text.substring(0, 130) + "…" : text;
-      const meta = [getTypeLabel(q.question_type), (q.points != null ? q.points + " pts" : ""), q.approval_status].filter(Boolean).join(" · ");
+      const meta = [getTypeLabel(q.question_type), (q.points != null ? q.points + " pts" : "")].filter(Boolean).join(" · ");
       return '<div class="tqq-picker-item">' +
         '<div class="tqq-picker-text">' + escapeHtml(preview) +
           '<div class="tqq-picker-meta">' + escapeHtml(meta) + '</div>' +

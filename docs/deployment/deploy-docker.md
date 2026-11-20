@@ -137,8 +137,9 @@ CORS reflects private/LAN origins automatically (`localhost`, `127.0.0.1`, `10.x
 
 Every third-party front-end library is vendored under `lms-frontend/assets/vendor/` and served by
 nginx: Font Awesome, Chart.js, jsPDF, jsPDF-AutoTable, JSZip, SheetJS, Tailwind Play, and Bootstrap.
-Pages make no CDN requests, so the LMS keeps working on an isolated LAN. Versions, licenses, and
-source URLs are listed in `lms-frontend/assets/vendor/README.md`.
+Application pages reference only local assets (no `http`/`https` asset URLs) and make no CDN
+requests, so the LMS keeps working on an isolated LAN. Versions, licenses, and source URLs are
+listed in `lms-frontend/assets/vendor/README.md`.
 
 ## 4. Services and volumes
 
@@ -170,6 +171,8 @@ filename order:
 | `02-insert.sql` | Roles, permissions, super admin, demo data |
 | `03-refresh-tokens.sql` | Refresh-token storage |
 | `04-quiz-submission-questions.sql` | Per-attempt question order for "Shuffle Questions" |
+| `05-question-bank.sql` | Teacher-private question bank tables and metadata columns |
+| `06-question-bank-metadata.sql` | Question taxonomy and immutable version tables |
 
 Initialization **only runs on an empty volume**. If `db_data` already exists, the scripts are
 skipped. Apply new init files to an existing volume manually:
@@ -177,7 +180,15 @@ skipped. Apply new init files to an existing volume manually:
 ```bash
 docker compose exec -T db sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE"' \
   < db/init/04-quiz-submission-questions.sql
+docker compose exec -T db sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE"' \
+  < db/init/05-question-bank.sql
+docker compose exec -T db sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE"' \
+  < db/init/06-question-bank-metadata.sql
 ```
+
+The question-bank init files create the tables but not the owner-scoped taxonomy keys.
+Run `scope_question_bank_to_teachers.php` (section 6) after importing them, even on a
+fresh volume. See [`../assessment/question-bank.md`](../assessment/question-bank.md).
 
 > Provision a real super admin instead of using the seeded demo account:
 
@@ -198,6 +209,23 @@ docker compose exec api php migrations/add_institution_id_to_announcements.php
 docker compose exec api php migrations/add_prevent_backtracking_to_quizzes.php
 docker compose exec api php migrations/add_quiz_submission_progress.php
 ```
+
+For the teacher-private question bank, apply the sequence in this order (the last step is a
+one-time ownership normalization):
+
+```bash
+docker compose exec api php migrations/create_question_bank.php
+docker compose exec api php migrations/add_question_snapshot_to_quiz_submission_questions.php
+docker compose exec api php migrations/add_question_bank_metadata.php
+docker compose exec api php migrations/scope_question_bank_to_teachers.php
+```
+
+`scope_question_bank_to_teachers.php` assigns legacy ownerless questions to user 11
+(`benedict.teacher`) when such rows exist, marks legacy rows private/draft, and adds the
+owner-scoped taxonomy keys. Already-owned rows keep their owner; no API changes ownership later.
+If there is nothing to reassign, user 11 does not have to exist. It is safe to run after a fresh
+init as well as an upgrade. See
+[`../assessment/question-bank.md`](../assessment/question-bank.md).
 
 Most migrations check whether a column or table already exists and skip safely. Back up the
 database first when running against data you care about — see [`operations.md`](operations.md).

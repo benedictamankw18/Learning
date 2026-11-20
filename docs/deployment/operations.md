@@ -101,6 +101,25 @@ docker compose exec db sh -c \
 Some migrations depend on earlier ones (for example, tables must exist before backfills). Apply
 them in the order they were written. When in doubt, apply on staging first.
 
+### Question-bank migrations
+
+Apply these before relying on the teacher-private bank:
+
+```bash
+docker compose exec api php migrations/create_question_bank.php
+docker compose exec api php migrations/add_question_snapshot_to_quiz_submission_questions.php
+docker compose exec api php migrations/add_question_bank_metadata.php
+docker compose exec api php migrations/scope_question_bank_to_teachers.php
+```
+
+The final script is a one-time ownership normalization: it assigns legacy ownerless questions
+to user 11 (`benedict.teacher`) when such rows exist, marks legacy rows private/draft, and adds
+the owner-scoped taxonomy keys. Rows that already have an owner are unchanged, and no API
+reassigns ownership afterwards. If there is nothing to reassign, user 11 does not have to exist.
+It is safe to run after a fresh init as well as an upgrade; back up first because it updates
+existing rows. See
+[`../assessment/question-bank.md`](../assessment/question-bank.md).
+
 ## 4. Legacy upload migration
 
 This rewrites database references and copies files from the flat layout to the

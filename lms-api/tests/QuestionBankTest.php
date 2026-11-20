@@ -52,6 +52,7 @@ test('Question bank stores content once and applies a per-quiz points override',
 
         $questionId = $repo->addQuestion([
             'quiz_id' => $quizId,
+            'actor_user_id' => 11,
             'question_text' => $text,
             'question_type' => 'multiple_choice',
             'points' => 2,
@@ -84,7 +85,7 @@ test('Question bank stores content once and applies a per-quiz points override',
         assertSame(0, (int) $linkRow['position'], 'The first question starts at position 0');
         assertSame(null, $linkRow['points_override'], 'New links inherit the bank points');
 
-        // Editing points from a quiz must not rewrite the shared bank value.
+        // Editing points from a quiz must not rewrite the private bank default.
         $repo->updateQuestion($questionId, ['points' => 5], $quizId);
 
         $questions = $repo->getQuestions($quizId);
@@ -93,7 +94,7 @@ test('Question bank stores content once and applies a per-quiz points override',
         $bank->execute(['id' => $questionId]);
         assertSame(2, (int) $bank->fetch(PDO::FETCH_ASSOC)['points'], 'The bank default must stay unchanged');
 
-        // A bank-level edit is what changes the shared default.
+        // A bank-level edit is what changes the teacher’s own default.
         $repo->updateQuestion($questionId, ['points' => 7]);
         $bank->execute(['id' => $questionId]);
         assertSame(7, (int) $bank->fetch(PDO::FETCH_ASSOC)['points'], 'A bank edit updates the default');
@@ -126,6 +127,7 @@ test('Removing a question from a quiz only unlinks it from the bank', function (
 
         $questionId = $repo->addQuestion([
             'quiz_id' => $quizId,
+            'actor_user_id' => 11,
             'question_text' => 'Unlink me ' . uniqid(),
             'question_type' => 'short_answer',
             'points' => 1,
@@ -167,6 +169,7 @@ test('A question is not found through a quiz it is not linked to', function () {
 
         $questionId = $repo->addQuestion([
             'quiz_id' => $owningQuiz,
+            'actor_user_id' => 11,
             'question_text' => 'Scoped question ' . uniqid(),
             'question_type' => 'short_answer',
             'points' => 1,
@@ -210,6 +213,7 @@ test('Attempt snapshots keep the served content after a bank edit', function () 
 
         $questionId = $repo->addQuestion([
             'quiz_id' => $quizId,
+            'actor_user_id' => 11,
             'question_text' => $originalText,
             'question_type' => 'short_answer',
             'points' => 3,
@@ -279,6 +283,32 @@ test('Quiz question endpoints scope bank edits to a quiz', function () {
     assertContains('deleteQuestion($id, $quizId)', $controller);
     assertContains('Question removed from quiz', $controller);
 
+    $authoringMethods = [
+        'addQuestion',
+        'linkExistingQuestion',
+        'importQuestions',
+        'exportQuestions',
+        'importTemplate',
+        'updateQuestion',
+        'deleteQuestion',
+        'findManageableQuiz',
+    ];
+    foreach ($authoringMethods as $method) {
+        $body = testMethodBody($controller, $method);
+        assertNotSame('', $body, "Quiz authoring method {$method} must exist");
+        assertFalse(
+            str_contains($body, "requireRole(['admin'") || str_contains($body, "'super_admin'"),
+            "Admins must not author quiz questions in {$method}"
+        );
+    }
+    foreach (['addQuestion', 'linkExistingQuestion', 'findManageableQuiz', 'updateQuestion', 'deleteQuestion'] as $method) {
+        assertContains(
+            "requireRole(['teacher'])",
+            testMethodBody($controller, $method),
+            "{$method} must be teacher-only"
+        );
+    }
+
     $api = (string) file_get_contents($projectRoot . '/lms-frontend/assets/js/api.js');
     assertContains('updateQuestion: (id, data, quizId)', $api);
     assertContains('deleteQuestion: (id, quizId)', $api);
@@ -307,6 +337,7 @@ test('CSV import reuses a matching bank row instead of duplicating it', function
 
         $repo->addQuestion([
             'quiz_id' => $firstQuiz,
+            'actor_user_id' => 11,
             'question_text' => $text,
             'question_type' => 'short_answer',
             'points' => 1,
@@ -325,7 +356,7 @@ test('CSV import reuses a matching bank row instead of duplicating it', function
             ]),
         ]];
 
-        $summary = $repo->importQuestions($secondQuiz, $prepared);
+        $summary = $repo->importQuestions($secondQuiz, $prepared, 11);
         assertSame(1, $summary['imported'], 'The existing bank question must be linked');
         assertSame(0, $summary['failed']);
 
@@ -342,7 +373,7 @@ test('CSV import reuses a matching bank row instead of duplicating it', function
         $linked->execute(['quiz_id' => $secondQuiz, 'text' => $text]);
         assertSame(1, (int) $linked->fetchColumn(), 'The question must be linked to the importing quiz');
 
-        $again = $repo->importQuestions($secondQuiz, $prepared);
+        $again = $repo->importQuestions($secondQuiz, $prepared, 11);
         assertSame(1, $again['skipped'], 'Re-importing the same quiz must skip the duplicate');
         assertSame(0, $again['imported']);
     } finally {

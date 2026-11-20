@@ -363,7 +363,7 @@ return [
     'PUT /quizzes/questions/{id}' => ['controller' => 'QuizController', 'method' => 'updateQuestion', 'auth' => true],
     'DELETE /quizzes/questions/{id}' => ['controller' => 'QuizController', 'method' => 'deleteQuestion', 'auth' => true],
 
-    // Phase 1C: central question bank (taxonomy, approval, versions)
+    // Teacher-private question bank (personal taxonomy and immutable versions)
     'GET /question-bank/questions' => ['controller' => 'QuestionBankController', 'method' => 'index', 'auth' => true],
     'POST /question-bank/questions' => ['controller' => 'QuestionBankController', 'method' => 'create', 'auth' => true],
     'POST /question-bank/questions/import' => ['controller' => 'QuestionBankController', 'method' => 'importQuestions', 'auth' => true],
@@ -371,10 +371,6 @@ return [
     'GET /question-bank/questions/import-template' => ['controller' => 'QuestionBankController', 'method' => 'importTemplate', 'auth' => true],
     'GET /question-bank/questions/{id}' => ['controller' => 'QuestionBankController', 'method' => 'show', 'auth' => true],
     'PUT /question-bank/questions/{id}' => ['controller' => 'QuestionBankController', 'method' => 'update', 'auth' => true],
-    'POST /question-bank/questions/{id}/submit-for-approval' => ['controller' => 'QuestionBankController', 'method' => 'submitForApproval', 'auth' => true],
-    'POST /question-bank/questions/{id}/approve' => ['controller' => 'QuestionBankController', 'method' => 'approve', 'auth' => true],
-    'POST /question-bank/questions/{id}/reject' => ['controller' => 'QuestionBankController', 'method' => 'reject', 'auth' => true],
-    'POST /question-bank/questions/{id}/fork' => ['controller' => 'QuestionBankController', 'method' => 'fork', 'auth' => true],
     'POST /question-bank/questions/{id}/archive' => ['controller' => 'QuestionBankController', 'method' => 'archive', 'auth' => true],
     'GET /question-bank/questions/{id}/versions' => ['controller' => 'QuestionBankController', 'method' => 'versions', 'auth' => true],
     'GET /question-bank/categories' => ['controller' => 'QuestionBankController', 'method' => 'categoryIndex', 'auth' => true],

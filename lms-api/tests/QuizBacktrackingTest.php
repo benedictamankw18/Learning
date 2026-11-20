@@ -200,6 +200,7 @@ function backtrackingAttempt(QuizRepository $repo, PDO $pdo, PDO $db, string $ti
     for ($i = 1; $i <= $questionCount; $i++) {
         $repo->addQuestion([
             'quiz_id' => $quizId,
+            'actor_user_id' => 11,
             'question_text' => $title . ' question ' . $i,
             'question_type' => 'short_answer',
             'points' => 1,

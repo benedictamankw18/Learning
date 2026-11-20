@@ -740,7 +740,7 @@ class QuizController
     }
 
     /**
-     * Get questions for a quiz (teacher/admin or enrolled student)
+     * Get questions for a quiz (owning teacher or enrolled student).
      * GET /quizzes/{id}/questions
      */
     public function getQuestions(array $user, int $id): void
@@ -761,9 +761,7 @@ class QuizController
         }
 
         $roleMiddleware = new RoleMiddleware($user);
-        if ($roleMiddleware->isAdmin()) {
-            // Admins and super admins may view any quiz's questions in their institution.
-        } elseif ($roleMiddleware->isTeacher()) {
+        if ($roleMiddleware->isTeacher()) {
             if ((int) ($quiz['teacher_id'] ?? 0) !== (int) ($user['teacher_id'] ?? 0)) {
                 Response::error('Quiz not found', 404);
                 return;
@@ -781,7 +779,10 @@ class QuizController
             return;
         }
 
-        $questions = $this->repo->getQuestions($id);
+        // Teachers may only manage questions from their own private bank.
+        $questions = $roleMiddleware->isTeacher()
+            ? $this->repo->getQuestions($id, (int) ($user['user_id'] ?? 0))
+            : $this->repo->getQuestions($id);
 
         // Never expose answer keys to students while they are taking the quiz.
         if ($roleMiddleware->isStudent() && !$roleMiddleware->isAdmin()) {
@@ -1028,13 +1029,13 @@ class QuizController
     }
 
     /**
-     * Add question to quiz (teacher/admin)
+     * Add a question authored by the current teacher to a quiz.
      * POST /quizzes/{id}/questions
      */
     public function addQuestion(array $user, int $id): void
     {
         $roleMiddleware = new RoleMiddleware($user);
-        if (!$roleMiddleware->requireRole(['admin', 'teacher', 'super_admin'])) {
+        if (!$roleMiddleware->requireRole(['teacher'])) {
             return;
         }
 
@@ -1046,17 +1047,11 @@ class QuizController
             return;
         }
 
-        // Check authorization
-        if (!AccessControl::isSuperAdmin($user)
-            && (int) $quiz['institution_id'] !== AccessControl::institutionId($user)) {
+        // Check tenant scope and quiz ownership. Administrators cannot author
+        // questions, even for a quiz they scheduled.
+        if ((int) $quiz['institution_id'] !== AccessControl::institutionId($user)
+            || ($quiz['teacher_id'] ?? 0) != ($user['teacher_id'] ?? 0)) {
             Response::error('Quiz not found', 404);
-            return;
-        }
-
-        // Teachers can only add questions to their own quizzes
-        if ($roleMiddleware->isTeacher() && !$roleMiddleware->isAdmin()
-            && ($quiz['teacher_id'] ?? 0) != ($user['teacher_id'] ?? 0)) {
-            Response::forbidden('You can only add questions to your own quizzes');
             return;
         }
 
@@ -1121,13 +1116,13 @@ class QuizController
     }
 
     /**
-     * Link an existing bank question to a quiz (teacher/admin)
+     * Link one of the teacher's own bank questions to a quiz.
      * POST /quizzes/{id}/questions/link
      */
     public function linkExistingQuestion(array $user, int $id): void
     {
         $roleMiddleware = new RoleMiddleware($user);
-        if (!$roleMiddleware->requireRole(['admin', 'teacher', 'super_admin'])) {
+        if (!$roleMiddleware->requireRole(['teacher'])) {
             return;
         }
 
@@ -1137,15 +1132,9 @@ class QuizController
             return;
         }
 
-        if (!AccessControl::isSuperAdmin($user)
-            && (int) $quiz['institution_id'] !== AccessControl::institutionId($user)) {
+        if ((int) $quiz['institution_id'] !== AccessControl::institutionId($user)
+            || ($quiz['teacher_id'] ?? 0) != ($user['teacher_id'] ?? 0)) {
             Response::error('Quiz not found', 404);
-            return;
-        }
-
-        if ($roleMiddleware->isTeacher() && !$roleMiddleware->isAdmin()
-            && ($quiz['teacher_id'] ?? 0) != ($user['teacher_id'] ?? 0)) {
-            Response::forbidden('You can only add questions to your own quizzes');
             return;
         }
 
@@ -1156,13 +1145,13 @@ class QuizController
         }
 
         $questionId = (int) $data['question_id'];
-        $question = (new QuestionBankRepository())->findVisibleQuestion($questionId, $user);
+        $question = (new QuestionBankRepository())->findOwnedQuestion($questionId, $user);
         if (!$question) {
             Response::error('Question not found', 404);
             return;
         }
 
-        if (!$this->repo->linkExistingQuestion($id, $questionId)) {
+        if (!$this->repo->linkExistingQuestion($id, $questionId, (int) ($user['user_id'] ?? 0))) {
             Response::validationError([
                 'question_id' => ['This question is unavailable or is already in the quiz'],
             ]);
@@ -1176,7 +1165,7 @@ class QuizController
     }
 
     /**
-     * Import questions from a CSV file (teacher/admin)
+     * Import questions from a CSV file into the teacher's private bank.
      * POST /quizzes/{id}/questions/import
      */
     public function importQuestions(array $user, int $id): void
@@ -1270,7 +1259,7 @@ class QuizController
         $failed = $invalid;
 
         if ($prepared !== []) {
-            $summary = $this->repo->importQuestions($id, $prepared);
+            $summary = $this->repo->importQuestions($id, $prepared, (int) ($user['user_id'] ?? 0));
             $imported = (int) $summary['imported'];
             $skipped = (int) $summary['skipped'];
             $failed += (int) $summary['failed'];
@@ -1300,7 +1289,7 @@ class QuizController
     }
 
     /**
-     * Export a quiz's questions as CSV (teacher/admin)
+     * Export the teacher's own questions from a quiz as CSV.
      * GET /quizzes/{id}/questions/export
      */
     public function exportQuestions(array $user, int $id): void
@@ -1310,14 +1299,14 @@ class QuizController
             return;
         }
 
-        $questions = $this->repo->getQuestions($id);
+        $questions = $this->repo->getQuestions($id, (int) ($user['user_id'] ?? 0));
         $csv = QuestionCsv::serialize($questions);
 
         $this->streamCsv($csv, 'quiz-' . $id . '-questions-' . date('Y-m-d-His') . '.csv');
     }
 
     /**
-     * Download the import template (teacher/admin)
+     * Download the question import template.
      * GET /quizzes/{id}/questions/import-template
      */
     public function importTemplate(array $user, int $id): void
@@ -1336,7 +1325,7 @@ class QuizController
     private function findManageableQuiz(array $user, int $quizId, string $forbiddenMessage): ?array
     {
         $roleMiddleware = new RoleMiddleware($user);
-        if (!$roleMiddleware->requireRole(['admin', 'teacher', 'super_admin'])) {
+        if (!$roleMiddleware->requireRole(['teacher'])) {
             return null;
         }
 
@@ -1347,15 +1336,9 @@ class QuizController
             return null;
         }
 
-        if (!AccessControl::isSuperAdmin($user)
-            && (int) $quiz['institution_id'] !== AccessControl::institutionId($user)) {
+        if ((int) $quiz['institution_id'] !== AccessControl::institutionId($user)
+            || ($quiz['teacher_id'] ?? 0) != ($user['teacher_id'] ?? 0)) {
             Response::error('Quiz not found', 404);
-            return null;
-        }
-
-        if ($roleMiddleware->isTeacher() && !$roleMiddleware->isAdmin()
-            && ($quiz['teacher_id'] ?? 0) != ($user['teacher_id'] ?? 0)) {
-            Response::forbidden($forbiddenMessage);
             return null;
         }
 
@@ -1397,13 +1380,13 @@ class QuizController
     }
 
     /**
-     * Update question (teacher/admin)
+     * Update one of the teacher's own questions.
      * PUT /quiz-questions/{id}
      */
     public function updateQuestion(array $user, int $id): void
     {
         $roleMiddleware = new RoleMiddleware($user);
-        if (!$roleMiddleware->requireRole(['admin', 'teacher', 'super_admin'])) {
+        if (!$roleMiddleware->requireRole(['teacher'])) {
             return;
         }
 
@@ -1421,39 +1404,23 @@ class QuizController
             return;
         }
 
-        $isSuperAdmin = AccessControl::isSuperAdmin($user);
-        $isAdmin = $roleMiddleware->isAdmin();
-
-        if (!$isSuperAdmin
-            && (int) $question['institution_id'] !== AccessControl::institutionId($user)) {
+        if ((int) $question['institution_id'] !== AccessControl::institutionId($user)
+            || (int) ($question['owner_user_id'] ?? 0) !== (int) ($user['user_id'] ?? 0)) {
             Response::error('Question not found', 404);
             return;
         }
 
-        if (!$isSuperAdmin && !$isAdmin) {
-            // Bank content belongs to its creator; other teachers must fork
-            // rather than edit a colleague's question.
-            if ((int) ($question['owner_user_id'] ?? 0) !== (int) ($user['user_id'] ?? 0)) {
-                Response::forbidden('You can only edit questions you created');
+        if ($quizId !== null && !empty($question['quiz_id'])) {
+            $quiz = $this->repo->findById((int) $question['quiz_id']);
+            if (!$quiz) {
+                Response::error('Quiz not found', 404);
                 return;
             }
 
-            if ($quizId !== null && !empty($question['quiz_id'])) {
-                $quiz = $this->repo->findById((int) $question['quiz_id']);
-                if (!$quiz) {
-                    Response::error('Quiz not found', 404);
-                    return;
-                }
-
-                if ((int) $quiz['institution_id'] !== AccessControl::institutionId($user)) {
-                    Response::error('Question not found', 404);
-                    return;
-                }
-
-                if (($quiz['teacher_id'] ?? 0) != ($user['teacher_id'] ?? 0)) {
-                    Response::forbidden('You can only update questions in your own quizzes');
-                    return;
-                }
+            if ((int) $quiz['institution_id'] !== AccessControl::institutionId($user)
+                || ($quiz['teacher_id'] ?? 0) != ($user['teacher_id'] ?? 0)) {
+                Response::error('Quiz not found', 404);
+                return;
             }
         }
 
@@ -1499,10 +1466,8 @@ class QuizController
             $data['options'] = $normalizedOptions;
         }
 
-        // Phase 1C: version the edit and return a shared question to review
-        // when a non-admin changes its content.
+        // Immutable version 2+ records the content served to future attempts.
         $data['actor_user_id'] = (int) ($user['user_id'] ?? 0);
-        $data['reset_approval_on_edit'] = !($isSuperAdmin || $isAdmin);
 
         $this->repo->updateQuestion($id, $data, $quizId);
 
@@ -1573,13 +1538,13 @@ class QuizController
     }
 
     /**
-     * Delete question (teacher/admin)
+     * Remove one of the teacher's own questions from a quiz.
      * DELETE /quiz-questions/{id}
      */
     public function deleteQuestion(array $user, int $id): void
     {
         $roleMiddleware = new RoleMiddleware($user);
-        if (!$roleMiddleware->requireRole(['admin', 'teacher', 'super_admin'])) {
+        if (!$roleMiddleware->requireRole(['teacher'])) {
             return;
         }
 
@@ -1590,38 +1555,25 @@ class QuizController
             return;
         }
 
-        $isSuperAdmin = AccessControl::isSuperAdmin($user);
-        $isAdmin = $roleMiddleware->isAdmin();
-
-        if (!$isSuperAdmin
-            && (int) $question['institution_id'] !== AccessControl::institutionId($user)) {
+        if ((int) $question['institution_id'] !== AccessControl::institutionId($user)
+            || (int) ($question['owner_user_id'] ?? 0) !== (int) ($user['user_id'] ?? 0)) {
             Response::error('Question not found', 404);
             return;
         }
 
-        $isCreator = (int) ($question['owner_user_id'] ?? 0) === (int) ($user['user_id'] ?? 0);
-
-        if (!$isSuperAdmin && !$isAdmin && !$isCreator) {
-            // A teacher who did not create the question may still take it out
-            // of a quiz they manage, but may not unlink it everywhere.
-            $canManageQuiz = false;
-
-            if (!empty($question['quiz_id'])) {
-                $quiz = $this->repo->findById((int) $question['quiz_id']);
-                $canManageQuiz = $quiz
-                    && (int) $quiz['institution_id'] === AccessControl::institutionId($user)
-                    && ($quiz['teacher_id'] ?? 0) == ($user['teacher_id'] ?? 0);
-            }
-
-            if (!$canManageQuiz) {
-                Response::forbidden('You can only remove questions from your own quizzes');
+        if (!empty($question['quiz_id'])) {
+            $quiz = $this->repo->findById((int) $question['quiz_id']);
+            if (!$quiz
+                || (int) $quiz['institution_id'] !== AccessControl::institutionId($user)
+                || ($quiz['teacher_id'] ?? 0) != ($user['teacher_id'] ?? 0)) {
+                Response::error('Quiz not found', 404);
                 return;
             }
         }
 
-        if (!empty($question['quiz_id']) && $quizId === null && !$isSuperAdmin && !$isAdmin && !$isCreator) {
-            // Scope the legacy endpoint to the quiz the teacher manages
-            // instead of unlinking a shared question from every quiz.
+        // The legacy endpoint without quiz_id must never unlink a question
+        // from every quiz; scope it to the owning teacher's quiz.
+        if (!empty($question['quiz_id']) && $quizId === null) {
             $quizId = (int) $question['quiz_id'];
         }
 

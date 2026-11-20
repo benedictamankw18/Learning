@@ -17,6 +17,8 @@ Related documentation:
 
 - [`../security/phase7-secret-rotation.md`](../security/phase7-secret-rotation.md) — rotating
   compromised secrets and purging Git history.
+- [`../assessment/question-bank.md`](../assessment/question-bank.md) — the teacher-private
+  question bank, its init/migration files, and ownership rules.
 - [`../assessment/question-import-export.md`](../assessment/question-import-export.md) — the
   CSV question import/export format and workflow.
 - The **Security Notes** section of the root [`README.md`](../../README.md).

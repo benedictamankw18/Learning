@@ -209,12 +209,22 @@ test('Question bank init file and migration describe the same schema', function 
         'question_type',
         'points',
         'is_archived',
+        'current_version_id',
     ] as $column) {
         assertContains("`{$column}`", $init, "questions must define {$column}");
     }
 
     assertContains('`points_override`', $init, 'Per-quiz points live on the link');
     assertContains('`position`', $init, 'Per-quiz order lives on the link');
+
+    $metadataInit = (string) file_get_contents($projectRoot . '/db/init/06-question-bank-metadata.sql');
+    assertContains('`owner_user_id` int(11) NOT NULL', $metadataInit, 'Taxonomy is teacher-owned');
+    assertContains('uq_qcategory_owner_name', $metadataInit, 'Section names are unique per owner');
+    assertContains('uq_qtopic_owner_scope', $metadataInit, 'Topic names are unique per owner');
+
+    $scopeMigration = (string) file_get_contents($root . '/migrations/scope_question_bank_to_teachers.php');
+    assertContains('scope_question_bank_to_teachers.php', $scopeMigration);
+    assertContains('fallbackOwnerId = 11', $scopeMigration);
 
     $migration = (string) file_get_contents($root . '/migrations/create_question_bank.php');
     assertContains("db/init/05-question-bank.sql", $migration, 'The migration must use the init file as its source of truth');

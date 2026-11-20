@@ -1,15 +1,16 @@
 <?php
 /**
- * Migration: add Phase 1C question bank metadata, taxonomy and versions.
+ * Migration: add question bank taxonomy and immutable versions.
  * Run from the repository root:
  *   php lms-api/migrations/add_question_bank_metadata.php
  *
  * This migration is additive and idempotent:
  *   1. executes db/init/06-question-bank-metadata.sql (new tables only);
- *   2. adds the metadata columns declared in 05-question-bank.sql and
- *      01-lms.sql to an existing database;
- *   3. grandfathers existing questions as institution-visible/approved and
- *      freezes their current content as version 1.
+ *   2. adds taxonomy ownership plus the metadata columns declared in
+ *      05-question-bank.sql and 01-lms.sql to an existing database;
+ *   3. freezes existing question content as version 1 and marks legacy rows
+ *      private/draft. Ownership normalization happens once in
+ *      scope_question_bank_to_teachers.php.
  *
  * Attempt rows keep their JSON snapshot; question_version_id is left NULL for
  * them because their snapshot cannot be mapped to a version reliably.
@@ -98,6 +99,12 @@ try {
 
     // 2. Additive columns. Keep this list in sync with the init files.
     $addColumns = [
+        'question_categories' => [
+            'owner_user_id' => 'int(11) DEFAULT NULL AFTER institution_id',
+        ],
+        'question_topics' => [
+            'owner_user_id' => 'int(11) DEFAULT NULL AFTER institution_id',
+        ],
         'questions' => [
             'category_id' => 'int(11) DEFAULT NULL AFTER is_archived',
             'subject_id' => 'int(11) DEFAULT NULL AFTER category_id',
@@ -163,9 +170,8 @@ try {
     $updateQuestion = $pdo->prepare("
         UPDATE questions
         SET current_version_id = :version_id,
-            visibility = 'institution',
-            approval_status = 'approved',
-            reviewed_at = COALESCE(updated_at, NOW())
+            visibility = 'private',
+            approval_status = 'draft'
         WHERE question_id = :question_id
     ");
 

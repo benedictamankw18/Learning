@@ -1,34 +1,39 @@
 # Question Import and Export (CSV)
 
-Teachers and administrators can move quiz questions in and out of the LMS as
-CSV files. The same CSV shape is used by the export endpoint and by the
+Teachers move quiz questions in and out of their private question bank as CSV
+files. Administrators and super admins do not author bank questions and cannot
+use these actions. The same CSV shape is used by the export endpoint and by the
 downloadable template, so a file exported from one quiz can be imported into
 another without editing.
 
 This is Phase 1A of the assessment roadmap: import, export, and a template.
-There is no `.xlsx` support and no "replace all" mode yet.
+There is no `.xlsx` support and no "replace all" mode yet. Import is append-only,
+skips duplicate text in the teacher's own bank/quiz, and accepts at most 500
+question rows per file.
 
 ## Where it lives in the UI
 
-Open **Teacher → Quizzes**, then open a quiz's question manager. The toolbar
-has three controls:
+Open **Teacher → Quizzes**, then open a quiz's question manager
+(`quiz-questions?id=<quizId>`). The same three controls are also on the teacher
+**Question Bank** page (`question-bank`), where they act on the teacher's own
+bank:
 
 | Control | What it does |
 | --- | --- |
 | **Import Questions** | Opens a dialog where you choose a `.csv` file, optionally download the template, then confirm the import. Per-row results are shown in the dialog. |
-| **Export Questions** | Downloads the quiz's current questions as `quiz-<id>-questions-<timestamp>.csv`. |
-| **Download Template** (inside the import dialog) | Downloads `quiz-<id>-questions-import-template.csv`, which contains guidance comments, the header row, and three `SAMPLE` rows. |
+| **Export Questions** | Downloads the quiz's questions as `quiz-<id>-questions-<timestamp>.csv`, or the teacher's own bank as `question-bank-questions-<timestamp>.csv`. |
+| **Download Template** (inside the import dialog) | Downloads `quiz-<id>-questions-import-template.csv` on the quiz page or `question-bank-questions-import-template.csv` on the bank page. It contains guidance comments, the header row, and three `SAMPLE` rows. |
 
-All three actions require a signed-in teacher, institution admin, or super
-admin who is allowed to manage the quiz. The server enforces the same rules as
-the rest of the quiz endpoints:
+All three actions are teacher-only. The server enforces the same ownership rules
+as the rest of question authoring:
 
-- Super admins may manage any quiz.
-- Everyone else may only touch quizzes in their own institution (`404` if the
-  quiz belongs to another institution, so the existence of the quiz is not
-  leaked).
-- A teacher who is not also an admin may only touch their own quizzes (`403`
-  otherwise).
+- A teacher may only use the quiz-page actions on their own quizzes. Another
+  teacher's quiz, or a quiz in another institution, returns `404` so its
+  existence is not leaked.
+- Bank-page actions always read and write only the caller's own questions;
+  another teacher's rows are never visible.
+- Institution admins and super admins receive `403`. Their quiz role is
+  assignment, scheduling, and results, not question authoring.
 
 ## CSV columns
 
@@ -98,14 +103,15 @@ extra spreadsheet columns without breaking the import.
 Import is **append-only**. Existing questions are never modified or removed.
 
 - **Duplicates are skipped.** A row whose `question_text` matches an existing
-  question in the same quiz is skipped. The comparison ignores leading and
-  trailing whitespace and letter case. Re-importing the same file is therefore
-  safe: nothing is duplicated.
+  question in the same quiz (quiz page) or in the teacher's own bank (bank page)
+  is skipped. The quiz-page comparison ignores leading and trailing whitespace
+  and letter case, so re-importing the same file is safe: nothing is duplicated.
 - **Invalid rows do not abort the file.** Each row is validated before insert,
   and each insert runs inside its own savepoint. A row that fails validation or
   saving is reported, and the remaining rows still import.
 - **Imported questions are appended** after the quiz's current highest
-  `order_index`.
+  `order_index` on the quiz page; bank-page imports append new rows to the
+  teacher's own bank.
 - **Limits:** 500 question rows and 2 MB per file. Split larger banks into
   several files.
 
@@ -132,8 +138,10 @@ up with the row numbers shown by a spreadsheet.
 ## Export behaviour
 
 Export writes every question in the quiz, in the quiz's stored order, using the
-canonical column list. Multiple-choice rows include the correct option label in
-`correct_answer` and the option text in `option_a`–`option_f`.
+canonical column list. On the bank page it writes the teacher's own questions
+(non-archived by default, honouring the list filters) in `question_id` order.
+Multiple-choice rows include the correct option label in `correct_answer` and
+the option text in `option_a`–`option_f`.
 
 The export is not a backup of the whole quiz (title, timing, attempts, and so
 on are not included) — it is a portable question bank extract. Importing it
@@ -142,19 +150,20 @@ and creates bank rows only for genuinely new question text.
 
 ## Question bank reuse
 
-Question content is stored once in the central bank (see
+Question content is stored once in the teacher's private bank (see
 [the question bank](question-bank.md)). Import follows that model:
 
 1. If the quiz already contains a question with the same text (case-insensitive,
    trimmed), the row is reported as `skipped`.
-2. Otherwise, if the quiz's teacher already owns a matching bank question, or
-   the institution owns one, the existing bank row is linked to the quiz and the
-   row is reported as `imported`. The bank row is not duplicated.
-3. Only when no matching bank question is visible does the import create a new
-   bank question.
+2. Otherwise, if the teacher already owns a matching, unarchived bank question,
+   the existing bank row is linked to the quiz and the row is reported as
+   `imported`. The bank row is not duplicated; there is no institution-wide
+   sharing or approval status to consult.
+3. Only when no matching bank question exists in the teacher's own bank does the
+   import create a new owned bank question.
 
 This means re-importing a file is idempotent and importing an exported quiz
-does not multiply identical questions across the bank.
+does not multiply identical questions across the teacher's bank.
 
 ## Formula injection protection
 
@@ -171,21 +180,27 @@ round-trip safety.
 
 ## HTTP endpoints
 
-All endpoints require authentication. `<id>` is the quiz ID.
+All endpoints require authentication and the `teacher` role. `<id>` is the quiz
+ID for the quiz-page endpoints.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `POST` | `/api/quizzes/<id>/questions/import` | Import a CSV. Send `multipart/form-data` with a single `file` field containing a `.csv`. |
 | `GET` | `/api/quizzes/<id>/questions/export` | Download the quiz's questions as CSV. |
 | `GET` | `/api/quizzes/<id>/questions/import-template` | Download the import template. |
+| `POST` | `/api/question-bank/questions/import` | Append CSV rows to the teacher's own bank. |
+| `GET` | `/api/question-bank/questions/export` | Export the teacher's own bank; accepts the same optional filters as the bank list. |
+| `GET` | `/api/question-bank/questions/import-template` | Download the bank CSV template. |
+
+Admins and super admins receive `403` on all six endpoints.
 
 Import error responses:
 
 | Status | When |
 | --- | --- |
 | `400` | No file, an upload failure, or an unreadable temporary file. |
-| `403` | The caller is a teacher who does not own the quiz. |
-| `404` | The quiz does not exist, or is in another institution. |
+| `403` | The caller is not a teacher (admins and super admins cannot author questions). |
+| `404` | The quiz does not exist, belongs to another institution, or belongs to another teacher. |
 | `422` | Not a `.csv`, empty file, larger than 2 MB, missing required headers, no question rows, or more than 500 rows. |
 
 Exports and templates are streamed with `Content-Type: text/csv; charset=utf-8`
@@ -201,12 +216,17 @@ the browser cache.
   `/api/upload/quiz-questions/photo.png`.
 - `/api/upload/...` and absolute `http(s)://` URLs are kept as they are.
 
+Absolute `http(s)://` values are CSV data supplied by the file, not assets
+bundled with the frontend; the app's own UI assets are served locally. Prefer an
+uploaded path for images that must display on an offline LAN.
+
 Upload images through the question editor first, then reference the returned
 path in the CSV.
 
 ## Template workflow
 
-1. In the question manager, choose **Import Questions** → **Download Template**.
+1. In the quiz question manager or on the question-bank page, choose
+   **Import Questions** → **Download Template**.
 2. Open the file in a spreadsheet.
 3. Delete the three `SAMPLE` rows and the `#` guidance lines (or leave the
    guidance lines — anything before the header is ignored).

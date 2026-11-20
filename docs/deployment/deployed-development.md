@@ -32,6 +32,8 @@ mysql -u root -p lms < db/init/01-lms.sql
 mysql -u root -p lms < db/init/02-insert.sql
 mysql -u root -p lms < db/init/03-refresh-tokens.sql
 mysql -u root -p lms < db/init/04-quiz-submission-questions.sql
+mysql -u root -p lms < db/init/05-question-bank.sql
+mysql -u root -p lms < db/init/06-question-bank-metadata.sql
 ```
 
 | File | Contents |
@@ -40,6 +42,8 @@ mysql -u root -p lms < db/init/04-quiz-submission-questions.sql
 | `02-insert.sql` | Roles, permissions, platform super admin, demo institution data |
 | `03-refresh-tokens.sql` | Refresh-token storage used by login/refresh/rotation |
 | `04-quiz-submission-questions.sql` | Per-attempt question order for "Shuffle Questions" |
+| `05-question-bank.sql` | Teacher-private question bank tables and metadata columns |
+| `06-question-bank-metadata.sql` | Question taxonomy and immutable version tables |
 
 Applying `01-lms.sql` to a database that already holds data will not add the newer columns.
 Run the standalone migrations instead, for example:
@@ -48,6 +52,21 @@ Run the standalone migrations instead, for example:
 php lms-api/migrations/add_prevent_backtracking_to_quizzes.php
 php lms-api/migrations/add_quiz_submission_progress.php
 ```
+
+For the teacher-private question bank, run this sequence in order (including on a fresh
+database, because the init files do not add the owner-scoped taxonomy keys):
+
+```bash
+php lms-api/migrations/create_question_bank.php
+php lms-api/migrations/add_question_snapshot_to_quiz_submission_questions.php
+php lms-api/migrations/add_question_bank_metadata.php
+php lms-api/migrations/scope_question_bank_to_teachers.php
+```
+
+The last migration is one-time: it assigns legacy ownerless questions to `benedict.teacher`
+(user 11), marks legacy rows private/draft, and adds `owner_user_id` to the taxonomy tables.
+Already-owned rows keep their owner; no API changes ownership later. See
+[`../assessment/question-bank.md`](../assessment/question-bank.md).
 
 Each migration checks whether its change already exists and skips safely.
 

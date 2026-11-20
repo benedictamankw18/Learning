@@ -211,6 +211,40 @@ function testTableExists(PDO $pdo, string $table): bool
 }
 
 /**
+ * Extract a named class method body from a PHP source string.
+ *
+ * Used by static policy tests that need to inspect one method without matching
+ * unrelated role gates elsewhere in the same controller.
+ */
+function testMethodBody(string $source, string $method): string
+{
+    $pattern = '/\b(?:public|private|protected)\s+function\s+'
+        . preg_quote($method, '/')
+        . '\s*\([^)]*\)\s*(?::\s*[^\{\s]+)?\s*\{/';
+
+    if (!preg_match($pattern, $source, $matches, PREG_OFFSET_CAPTURE)) {
+        return '';
+    }
+
+    $start = $matches[0][1] + strlen($matches[0][0]);
+    $length = strlen($source);
+    $depth = 1;
+
+    for ($i = $start; $i < $length; $i++) {
+        if ($source[$i] === '{') {
+            $depth++;
+        } elseif ($source[$i] === '}') {
+            $depth--;
+            if ($depth === 0) {
+                return substr($source, $start, $i - $start);
+            }
+        }
+    }
+
+    return '';
+}
+
+/**
  * Run a PHP snippet in a clean child process. Used to test configuration files
  * that throw or cache static state.
  *

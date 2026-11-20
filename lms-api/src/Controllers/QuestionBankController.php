@@ -10,10 +10,11 @@ use App\Utils\Response;
 use App\Utils\Validator;
 
 /**
- * Phase 1C: bank-wide browsing, taxonomy, approval and version history.
+ * Teacher-private question bank: browsing, personal taxonomy and versions.
  *
- * Quiz-scoped question editing stays in QuizController so existing clients
- * keep working; this controller adds the librarian-style operations.
+ * Only teachers may use the bank. Every read and write is scoped to the
+ * authenticated teacher's own questions; administrators have no bank access
+ * and there is no approval workflow.
  */
 class QuestionBankController
 {
@@ -32,23 +33,11 @@ class QuestionBankController
     }
 
     /**
-     * Institution used for new records. Super admins must supply one because
-     * their account has no institution of its own.
+     * Institution of the authenticated teacher. Never taken from the request.
      */
-    private function institutionFor(array $user, array $body = []): int
+    private function requireInstitution(array $user): int
     {
-        if (AccessControl::isSuperAdmin($user)) {
-            $candidate = $body['institution_id'] ?? $_POST['institution_id'] ?? $_GET['institution_id'] ?? null;
-
-            return (int) $candidate;
-        }
-
-        return AccessControl::institutionId($user);
-    }
-
-    private function requireInstitution(array $user, array $body = []): int
-    {
-        $institutionId = $this->institutionFor($user, $body);
+        $institutionId = AccessControl::institutionId($user);
         if ($institutionId <= 0) {
             Response::forbidden('Institution scope is required');
         }
@@ -56,20 +45,17 @@ class QuestionBankController
         return $institutionId;
     }
 
-    private function requireBankRole(array $user): void
+    private function requireBankTeacher(array $user): void
     {
         $middleware = new RoleMiddleware($user);
-        if (!$middleware->requireRole(['teacher', 'admin', 'super_admin'])) {
+        if (!$middleware->requireRole(['teacher'])) {
             return;
         }
     }
 
-    private function requireAdmin(array $user): void
+    private function bankOwnerId(array $user): int
     {
-        $middleware = new RoleMiddleware($user);
-        if (!$middleware->requireRole(['admin'])) {
-            return;
-        }
+        return (int) ($user['user_id'] ?? 0);
     }
 
     /* ------------------------------------------------------------------ */
@@ -78,28 +64,16 @@ class QuestionBankController
 
     public function index(array $user): void
     {
-        $this->requireBankRole($user);
+        $this->requireBankTeacher($user);
 
         $filters = [
             'category_id' => $_GET['category_id'] ?? null,
             'subject_id' => $_GET['subject_id'] ?? null,
             'topic_id' => $_GET['topic_id'] ?? null,
-            'visibility' => $_GET['visibility'] ?? null,
-            'approval_status' => $_GET['approval_status'] ?? null,
             'is_archived' => isset($_GET['is_archived']) ? (int) $_GET['is_archived'] : null,
+            'include_archived' => !empty($_GET['include_archived']),
             'q' => trim((string) ($_GET['q'] ?? '')),
         ];
-        foreach (['visibility', 'approval_status'] as $field) {
-            if (!empty($filters[$field])) {
-                $allowed = $field === 'visibility'
-                    ? ['private', 'institution']
-                    : ['draft', 'pending', 'approved', 'rejected'];
-                if (!in_array($filters[$field], $allowed, true)) {
-                    Response::validationError([$field => ['Invalid filter value']]);
-                    return;
-                }
-            }
-        }
 
         $page = max(1, (int) ($_GET['page'] ?? 1));
         $limit = min(100, max(1, (int) ($_GET['limit'] ?? 25)));
@@ -121,9 +95,9 @@ class QuestionBankController
 
     public function show(array $user, int $id): void
     {
-        $this->requireBankRole($user);
+        $this->requireBankTeacher($user);
 
-        $question = $this->repo->findVisibleQuestion($id, $user);
+        $question = $this->repo->findOwnedQuestion($id, $user);
         if (!$question) {
             Response::notFound('Question not found');
             return;
@@ -134,7 +108,7 @@ class QuestionBankController
 
     public function create(array $user): void
     {
-        $this->requireBankRole($user);
+        $this->requireBankTeacher($user);
         $institutionId = $this->requireInstitution($user);
         $data = $this->readBody();
 
@@ -155,8 +129,8 @@ class QuestionBankController
             return;
         }
 
-        if (!$this->metadataReferencesValid($data, $institutionId)) {
-            Response::validationError(['metadata' => ['Category, subject or topic does not belong to this institution']]);
+        if (!$this->metadataReferencesValid($data, $institutionId, $this->bankOwnerId($user))) {
+            Response::validationError(['metadata' => ['Section, subject or topic does not belong to your bank']]);
             return;
         }
 
@@ -174,17 +148,11 @@ class QuestionBankController
 
     public function update(array $user, int $id): void
     {
-        $this->requireBankRole($user);
+        $this->requireBankTeacher($user);
 
-        $question = $this->repo->findVisibleQuestion($id, $user);
+        $question = $this->repo->findOwnedQuestion($id, $user);
         if (!$question) {
             Response::notFound('Question not found');
-            return;
-        }
-
-        $isAdmin = AccessControl::isSuperAdmin($user) || AccessControl::isAdmin($user);
-        if (!$isAdmin && (int) $question['owner_user_id'] !== (int) ($user['user_id'] ?? 0)) {
-            Response::forbidden('Only the creator or an administrator can edit this question');
             return;
         }
 
@@ -197,24 +165,16 @@ class QuestionBankController
             ->numeric('subject_id')
             ->numeric('topic_id')
             ->in('difficulty', ['easy', 'medium', 'hard'])
-            ->in('visibility', ['private', 'institution'])
             ->max('image_question', 255)
             ->max('correct_answer', 500);
-
-        // Only administrators may change sharing directly. Teachers use the
-        // approval flow instead.
-        if (!$isAdmin && array_key_exists('visibility', $data)) {
-            Response::forbidden('Use submit-for-approval to share a question');
-            return;
-        }
         if ($validator->fails()) {
             Response::validationError($validator->getErrors());
             return;
         }
 
         $institutionId = (int) $question['institution_id'];
-        if (!$this->metadataReferencesValid($data, $institutionId)) {
-            Response::validationError(['metadata' => ['Category, subject or topic does not belong to this institution']]);
+        if (!$this->metadataReferencesValid($data, $institutionId, $this->bankOwnerId($user))) {
+            Response::validationError(['metadata' => ['Section, subject or topic does not belong to your bank']]);
             return;
         }
 
@@ -244,19 +204,13 @@ class QuestionBankController
                 $this->repo->updateContent($id, $data);
             }
 
-            $metadata = array_intersect_key($data, array_flip(['category_id', 'subject_id', 'topic_id', 'visibility']));
+            $metadata = array_intersect_key($data, array_flip(['category_id', 'subject_id', 'topic_id']));
             if ($metadata !== []) {
                 $this->repo->updateMetadata($id, $metadata);
             }
 
             if ($hasContentChange) {
                 $this->repo->createVersion($id, (int) ($user['user_id'] ?? 0));
-
-                // A teacher's edit to a shared question sends it back through
-                // review; administrator edits stay approved.
-                if (!$isAdmin && ($question['approval_status'] ?? '') === 'approved') {
-                    $this->repo->submitForApproval($id, (int) ($user['user_id'] ?? 0));
-                }
             }
 
             if ($ownsTransaction) {
@@ -272,123 +226,26 @@ class QuestionBankController
         Response::success(['message' => 'Question updated successfully']);
     }
 
-    public function submitForApproval(array $user, int $id): void
-    {
-        $this->requireBankRole($user);
-        $question = $this->repo->findVisibleQuestion($id, $user);
-        if (!$question) {
-            Response::notFound('Question not found');
-            return;
-        }
-
-        $isAdmin = AccessControl::isSuperAdmin($user) || AccessControl::isAdmin($user);
-        if (!$isAdmin && (int) $question['owner_user_id'] !== (int) ($user['user_id'] ?? 0)) {
-            Response::forbidden('Only the creator can submit this question');
-            return;
-        }
-        if (($question['approval_status'] ?? '') === 'approved') {
-            Response::validationError(['question' => ['This question is already approved']]);
-            return;
-        }
-
-        $this->repo->submitForApproval($id, (int) ($user['user_id'] ?? 0));
-        Response::success(['message' => 'Question submitted for approval']);
-    }
-
-    public function approve(array $user, int $id): void
-    {
-        $this->requireAdmin($user);
-        $question = $this->repo->findVisibleQuestion($id, $user);
-        if (!$question) {
-            Response::notFound('Question not found');
-            return;
-        }
-
-        $body = $this->readBody();
-        $note = isset($body['note']) ? trim((string) $body['note']) : null;
-        if ($note !== null && strlen($note) > 500) {
-            Response::validationError(['note' => ['Note must not exceed 500 characters']]);
-            return;
-        }
-
-        if ($question['current_version_id'] === null) {
-            $this->repo->createVersion($id, (int) ($user['user_id'] ?? 0));
-        }
-        $this->repo->approve($id, (int) ($user['user_id'] ?? 0), $note);
-
-        Response::success(['message' => 'Question approved']);
-    }
-
-    public function reject(array $user, int $id): void
-    {
-        $this->requireAdmin($user);
-        $question = $this->repo->findVisibleQuestion($id, $user);
-        if (!$question) {
-            Response::notFound('Question not found');
-            return;
-        }
-
-        $body = $this->readBody();
-        $validator = new Validator($body);
-        $validator->required(['note'])->max('note', 500);
-        if ($validator->fails()) {
-            Response::validationError($validator->getErrors());
-            return;
-        }
-
-        $this->repo->reject($id, (int) ($user['user_id'] ?? 0), trim((string) $body['note']));
-        Response::success(['message' => 'Question rejected']);
-    }
-
-    public function fork(array $user, int $id): void
-    {
-        $this->requireBankRole($user);
-        $question = $this->repo->findVisibleQuestion($id, $user);
-        if (!$question) {
-            Response::notFound('Question not found');
-            return;
-        }
-
-        if ((int) $question['owner_user_id'] === (int) ($user['user_id'] ?? 0)) {
-            Response::validationError(['question' => ['You already own this question']]);
-            return;
-        }
-
-        $newId = $this->repo->fork($id, $user);
-        if ($newId === null) {
-            Response::notFound('Question not found');
-            return;
-        }
-
-        Response::success(['question_id' => $newId], 'Question copied to your private bank', 201);
-    }
-
     public function archive(array $user, int $id): void
     {
-        $this->requireBankRole($user);
-        $question = $this->repo->findVisibleQuestion($id, $user);
+        $this->requireBankTeacher($user);
+        $question = $this->repo->findOwnedQuestion($id, $user);
         if (!$question) {
             Response::notFound('Question not found');
-            return;
-        }
-
-        $isAdmin = AccessControl::isSuperAdmin($user) || AccessControl::isAdmin($user);
-        if (!$isAdmin && (int) $question['owner_user_id'] !== (int) ($user['user_id'] ?? 0)) {
-            Response::forbidden('Only the creator or an administrator can archive this question');
             return;
         }
 
         $body = $this->readBody();
         $archived = !empty($body['is_archived']);
-        $this->repo->setArchived($id, $archived);
+        $this->repo->setArchived($id, $archived, $user);
 
         Response::success(['message' => $archived ? 'Question archived' : 'Question restored']);
     }
 
     public function versions(array $user, int $id): void
     {
-        $this->requireBankRole($user);
-        $question = $this->repo->findVisibleQuestion($id, $user);
+        $this->requireBankTeacher($user);
+        $question = $this->repo->findOwnedQuestion($id, $user);
         if (!$question) {
             Response::notFound('Question not found');
             return;
@@ -404,12 +261,12 @@ class QuestionBankController
     /**
      * POST /question-bank/questions/import
      *
-     * Appends CSV rows as private drafts in the actor's bank. Duplicate text
-     * is skipped; validation failures are reported per row.
+     * Appends CSV rows to the teacher's private bank. Duplicate text in the
+     * teacher's own bank is skipped; validation failures are reported per row.
      */
     public function importQuestions(array $user): void
     {
-        $this->requireBankRole($user);
+        $this->requireBankTeacher($user);
         $institutionId = $this->requireInstitution($user);
 
         $contents = $this->readUploadedCsv();
@@ -489,15 +346,14 @@ class QuestionBankController
      */
     public function exportQuestions(array $user): void
     {
-        $this->requireBankRole($user);
+        $this->requireBankTeacher($user);
 
         $filters = [
             'category_id' => $_GET['category_id'] ?? null,
             'subject_id' => $_GET['subject_id'] ?? null,
             'topic_id' => $_GET['topic_id'] ?? null,
-            'visibility' => $_GET['visibility'] ?? null,
-            'approval_status' => $_GET['approval_status'] ?? null,
             'is_archived' => isset($_GET['is_archived']) ? (int) $_GET['is_archived'] : null,
+            'include_archived' => !empty($_GET['include_archived']),
             'q' => trim((string) ($_GET['q'] ?? '')),
         ];
 
@@ -510,7 +366,7 @@ class QuestionBankController
      */
     public function importTemplate(array $user): void
     {
-        $this->requireBankRole($user);
+        $this->requireBankTeacher($user);
         $this->streamCsv(QuestionCsv::template(), 'question-bank-questions-import-template.csv');
     }
 
@@ -627,21 +483,24 @@ class QuestionBankController
     }
 
     /* ------------------------------------------------------------------ */
-    /* Categories                                                          */
+    /* Sections (categories)                                               */
     /* ------------------------------------------------------------------ */
 
     public function categoryIndex(array $user): void
     {
-        $this->requireBankRole($user);
+        $this->requireBankTeacher($user);
         $institutionId = $this->requireInstitution($user);
-        Response::success(['categories' => $this->repo->listCategories($institutionId)]);
+        Response::success([
+            'categories' => $this->repo->listCategories($institutionId, $this->bankOwnerId($user)),
+        ]);
     }
 
     public function categoryCreate(array $user): void
     {
-        $this->requireAdmin($user);
+        $this->requireBankTeacher($user);
         $body = $this->readBody();
-        $institutionId = $this->requireInstitution($user, $body);
+        $institutionId = $this->requireInstitution($user);
+        $ownerId = $this->bankOwnerId($user);
 
         $validator = new Validator($body);
         $validator->required(['name'])->max('name', 100)->numeric('parent_id');
@@ -651,29 +510,30 @@ class QuestionBankController
         }
 
         $parentId = !empty($body['parent_id']) ? (int) $body['parent_id'] : null;
-        if ($parentId !== null && !$this->repo->findCategory($parentId, $institutionId)) {
-            Response::validationError(['parent_id' => ['Parent category was not found']]);
+        if ($parentId !== null && !$this->repo->findCategory($parentId, $institutionId, $ownerId)) {
+            Response::validationError(['parent_id' => ['Parent section was not found']]);
             return;
         }
 
         try {
-            $id = $this->repo->createCategory($institutionId, (string) $body['name'], $parentId);
+            $id = $this->repo->createCategory($institutionId, $ownerId, (string) $body['name'], $parentId);
         } catch (\PDOException $e) {
-            Response::validationError(['name' => ['A category with this name already exists']]);
+            Response::validationError(['name' => ['A section with this name already exists']]);
             return;
         }
 
-        Response::success(['category_id' => $id], 'Category created', 201);
+        Response::success(['category_id' => $id], 'Section created', 201);
     }
 
     public function categoryUpdate(array $user, int $id): void
     {
-        $this->requireAdmin($user);
+        $this->requireBankTeacher($user);
         $body = $this->readBody();
-        $institutionId = $this->requireInstitution($user, $body);
+        $institutionId = $this->requireInstitution($user);
+        $ownerId = $this->bankOwnerId($user);
 
-        if (!$this->repo->findCategory($id, $institutionId)) {
-            Response::notFound('Category not found');
+        if (!$this->repo->findCategory($id, $institutionId, $ownerId)) {
+            Response::notFound('Section not found');
             return;
         }
 
@@ -685,37 +545,39 @@ class QuestionBankController
         }
 
         $parentId = !empty($body['parent_id']) ? (int) $body['parent_id'] : null;
-        if ($parentId === $id || ($parentId !== null && !$this->repo->findCategory($parentId, $institutionId))) {
-            Response::validationError(['parent_id' => ['Invalid parent category']]);
+        if ($parentId === $id
+            || ($parentId !== null && !$this->repo->findCategory($parentId, $institutionId, $ownerId))) {
+            Response::validationError(['parent_id' => ['Invalid parent section']]);
             return;
         }
 
         try {
-            $this->repo->updateCategory($id, $institutionId, (string) $body['name'], $parentId);
+            $this->repo->updateCategory($id, $institutionId, $ownerId, (string) $body['name'], $parentId);
         } catch (\PDOException $e) {
-            Response::validationError(['name' => ['A category with this name already exists']]);
+            Response::validationError(['name' => ['A section with this name already exists']]);
             return;
         }
 
-        Response::success(['message' => 'Category updated']);
+        Response::success(['message' => 'Section updated']);
     }
 
     public function categoryDelete(array $user, int $id): void
     {
-        $this->requireAdmin($user);
+        $this->requireBankTeacher($user);
         $institutionId = $this->requireInstitution($user);
+        $ownerId = $this->bankOwnerId($user);
 
-        if (!$this->repo->findCategory($id, $institutionId)) {
-            Response::notFound('Category not found');
+        if (!$this->repo->findCategory($id, $institutionId, $ownerId)) {
+            Response::notFound('Section not found');
             return;
         }
-        if ($this->repo->categoryInUse($id, $institutionId)) {
-            Response::validationError(['category' => ['Category is used by one or more questions']]);
+        if ($this->repo->categoryInUse($id, $institutionId, $ownerId)) {
+            Response::validationError(['category' => ['Section is used by one or more of your questions']]);
             return;
         }
 
-        $this->repo->deleteCategory($id, $institutionId);
-        Response::success(['message' => 'Category deleted']);
+        $this->repo->deleteCategory($id, $institutionId, $ownerId);
+        Response::success(['message' => 'Section deleted']);
     }
 
     /* ------------------------------------------------------------------ */
@@ -724,20 +586,23 @@ class QuestionBankController
 
     public function topicIndex(array $user): void
     {
-        $this->requireBankRole($user);
+        $this->requireBankTeacher($user);
         $institutionId = $this->requireInstitution($user);
         $subjectId = isset($_GET['subject_id']) && $_GET['subject_id'] !== ''
             ? (int) $_GET['subject_id']
             : null;
 
-        Response::success(['topics' => $this->repo->listTopics($institutionId, $subjectId)]);
+        Response::success([
+            'topics' => $this->repo->listTopics($institutionId, $subjectId, $this->bankOwnerId($user)),
+        ]);
     }
 
     public function topicCreate(array $user): void
     {
-        $this->requireAdmin($user);
+        $this->requireBankTeacher($user);
         $body = $this->readBody();
-        $institutionId = $this->requireInstitution($user, $body);
+        $institutionId = $this->requireInstitution($user);
+        $ownerId = $this->bankOwnerId($user);
 
         $validator = new Validator($body);
         $validator->required(['name'])->max('name', 150)->numeric('subject_id');
@@ -753,7 +618,7 @@ class QuestionBankController
         }
 
         try {
-            $id = $this->repo->createTopic($institutionId, $subjectId, (string) $body['name']);
+            $id = $this->repo->createTopic($institutionId, $ownerId, $subjectId, (string) $body['name']);
         } catch (\PDOException $e) {
             Response::validationError(['name' => ['A topic with this name already exists']]);
             return;
@@ -764,11 +629,12 @@ class QuestionBankController
 
     public function topicUpdate(array $user, int $id): void
     {
-        $this->requireAdmin($user);
+        $this->requireBankTeacher($user);
         $body = $this->readBody();
-        $institutionId = $this->requireInstitution($user, $body);
+        $institutionId = $this->requireInstitution($user);
+        $ownerId = $this->bankOwnerId($user);
 
-        if (!$this->repo->findTopic($id, $institutionId)) {
+        if (!$this->repo->findTopic($id, $institutionId, $ownerId)) {
             Response::notFound('Topic not found');
             return;
         }
@@ -787,7 +653,7 @@ class QuestionBankController
         }
 
         try {
-            $this->repo->updateTopic($id, $institutionId, $subjectId, (string) $body['name']);
+            $this->repo->updateTopic($id, $institutionId, $ownerId, $subjectId, (string) $body['name']);
         } catch (\PDOException $e) {
             Response::validationError(['name' => ['A topic with this name already exists']]);
             return;
@@ -798,19 +664,20 @@ class QuestionBankController
 
     public function topicDelete(array $user, int $id): void
     {
-        $this->requireAdmin($user);
+        $this->requireBankTeacher($user);
         $institutionId = $this->requireInstitution($user);
+        $ownerId = $this->bankOwnerId($user);
 
-        if (!$this->repo->findTopic($id, $institutionId)) {
+        if (!$this->repo->findTopic($id, $institutionId, $ownerId)) {
             Response::notFound('Topic not found');
             return;
         }
-        if ($this->repo->topicInUse($id, $institutionId)) {
-            Response::validationError(['topic' => ['Topic is used by one or more questions']]);
+        if ($this->repo->topicInUse($id, $institutionId, $ownerId)) {
+            Response::validationError(['topic' => ['Topic is used by one or more of your questions']]);
             return;
         }
 
-        $this->repo->deleteTopic($id, $institutionId);
+        $this->repo->deleteTopic($id, $institutionId, $ownerId);
         Response::success(['message' => 'Topic deleted']);
     }
 
@@ -845,7 +712,7 @@ class QuestionBankController
     /**
      * @param array<string,mixed> $data
      */
-    private function metadataReferencesValid(array $data, int $institutionId): bool
+    private function metadataReferencesValid(array $data, int $institutionId, int $ownerId): bool
     {
         foreach (['category_id' => 'category', 'topic_id' => 'topic'] as $field => $kind) {
             if (empty($data[$field])) {
@@ -853,8 +720,8 @@ class QuestionBankController
             }
             $id = (int) $data[$field];
             $found = $kind === 'category'
-                ? $this->repo->findCategory($id, $institutionId)
-                : $this->repo->findTopic($id, $institutionId);
+                ? $this->repo->findCategory($id, $institutionId, $ownerId)
+                : $this->repo->findTopic($id, $institutionId, $ownerId);
             if (!$found) {
                 return false;
             }
