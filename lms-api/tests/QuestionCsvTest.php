@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use App\Config\Database;
+use App\Repositories\QuestionBankRepository;
 use App\Repositories\QuizRepository;
 use App\Utils\QuestionCsv;
 
@@ -305,6 +306,9 @@ test('Question import and export endpoints are routed and wired into the teacher
     assertContains("'POST /quizzes/{id}/questions/import'", $routes);
     assertContains("'GET /quizzes/{id}/questions/export'", $routes);
     assertContains("'GET /quizzes/{id}/questions/import-template'", $routes);
+    assertContains("'POST /question-bank/questions/import'", $routes);
+    assertContains("'GET /question-bank/questions/export'", $routes);
+    assertContains("'GET /question-bank/questions/import-template'", $routes);
 
     $controller = (string) file_get_contents($root . '/src/Controllers/QuizController.php');
     assertContains('public function importQuestions', $controller);
@@ -314,23 +318,137 @@ test('Question import and export endpoints are routed and wired into the teacher
     assertContains('QuestionCsv::serialize', $controller);
     assertContains('QuestionCsv::template', $controller);
 
+    $bankController = (string) file_get_contents($root . '/src/Controllers/QuestionBankController.php');
+    assertContains('public function importQuestions', $bankController);
+    assertContains('public function exportQuestions', $bankController);
+    assertContains('public function importTemplate', $bankController);
+    assertContains('QuestionCsv::parse', $bankController);
+    assertContains('QuestionCsv::serialize', $bankController);
+    assertContains('QuestionCsv::template', $bankController);
+
     $config = (string) file_get_contents($projectRoot . '/lms-frontend/assets/js/config.js');
     assertContains('QUIZ_QUESTION_IMPORT', $config);
     assertContains('QUIZ_QUESTION_EXPORT', $config);
     assertContains('QUIZ_QUESTION_IMPORT_TEMPLATE', $config);
+    assertContains('QUESTION_BANK_QUESTION_IMPORT', $config);
+    assertContains('QUESTION_BANK_QUESTION_EXPORT', $config);
+    assertContains('QUESTION_BANK_QUESTION_IMPORT_TEMPLATE', $config);
 
     $api = (string) file_get_contents($projectRoot . '/lms-frontend/assets/js/api.js');
     assertContains('importQuestions:', $api);
     assertContains('exportQuestions:', $api);
     assertContains('downloadImportTemplate:', $api);
+    assertContains('API_ENDPOINTS.QUESTION_BANK_QUESTION_IMPORT', $api);
 
-    $page = (string) file_get_contents($projectRoot . '/lms-frontend/teacher/page/quizzes.html');
-    assertContains('questionImportBtn', $page);
-    assertContains('questionExportBtn', $page);
-    assertContains('quizQuestionImportModal', $page);
+    // The original modal in quizzes.html is unreachable; the controls that
+    // matter live on the standalone quiz-questions and question-bank pages.
+    $oldPage = (string) file_get_contents($projectRoot . '/lms-frontend/teacher/page/quizzes.html');
+    assertContains('questionImportBtn', $oldPage);
+    assertContains('questionExportBtn', $oldPage);
+    assertContains('quizQuestionImportModal', $oldPage);
 
-    $js = (string) file_get_contents($projectRoot . '/lms-frontend/teacher/js/quizzes.js');
-    assertContains('importQuestionsCsv', $js);
-    assertContains('exportQuestionsCsv', $js);
-    assertContains('downloadQuestionImportTemplate', $js);
+    $oldJs = (string) file_get_contents($projectRoot . '/lms-frontend/teacher/js/quizzes.js');
+    assertContains('importQuestionsCsv', $oldJs);
+    assertContains('exportQuestionsCsv', $oldJs);
+    assertContains('downloadQuestionImportTemplate', $oldJs);
+
+    $quizPage = (string) file_get_contents($projectRoot . '/lms-frontend/teacher/page/quiz-questions.html');
+    assertContains('quizQuestionsImportBtn', $quizPage);
+    assertContains('quizQuestionsExportQuestionsBtn', $quizPage);
+    assertContains('quizQuestionsTemplateBtn', $quizPage);
+    assertContains('quizQuestionsImportModal', $quizPage);
+
+    $quizJs = (string) file_get_contents($projectRoot . '/lms-frontend/teacher/js/quiz-questions.js');
+    assertContains('QuizAPI.importQuestions(state.quizId, formData)', $quizJs);
+    assertContains('QuizAPI.exportQuestions(state.quizId)', $quizJs);
+    assertContains('QuizAPI.downloadImportTemplate(state.quizId)', $quizJs);
+    assertContains('bindCsvEvents()', $quizJs);
+
+    $bankPage = (string) file_get_contents($projectRoot . '/lms-frontend/teacher/page/question-bank.html');
+    assertContains('qbImportBtn', $bankPage);
+    assertContains('qbExportBtn', $bankPage);
+    assertContains('qbTemplateBtn', $bankPage);
+    assertContains('qbImportModal', $bankPage);
+
+    $bankJs = (string) file_get_contents($projectRoot . '/lms-frontend/teacher/js/question-bank.js');
+    assertContains('QuestionBankAPI.importQuestions(formData)', $bankJs);
+    assertContains('QuestionBankAPI.exportQuestions(state.filters)', $bankJs);
+    assertContains('QuestionBankAPI.downloadImportTemplate()', $bankJs);
+    assertContains('bindCsvEvents()', $bankJs);
+});
+
+test('Bank CSV append keeps private drafts, freezes versions and skips duplicates', function () {
+    $pdo = testDatabase();
+    if (!$pdo) {
+        skip('database is not reachable');
+    }
+    foreach (['questions', 'question_bank_options', 'question_versions'] as $table) {
+        if (!testTableExists($pdo, $table)) {
+            skip('the central question bank has not been migrated');
+        }
+    }
+
+    $db = Database::getInstance()->getConnection();
+    $repo = new QuestionBankRepository();
+    $actor = ['user_id' => 990111, 'role' => 'teacher', 'roles' => ['teacher'], 'institution_id' => 1];
+    $marker = 'bank csv ' . uniqid();
+
+    $db->beginTransaction();
+    try {
+        $firstText = $marker . ' one';
+        $prepared = [
+            ['row' => 2, 'question' => QuestionCsv::buildQuestion([
+                'question_text' => $firstText,
+                'question_type' => 'multiple_choice',
+                'option_a' => 'Option A',
+                'option_b' => 'Option B',
+                'correct_answer' => 'A',
+            ])],
+            // Trailing whitespace is trimmed before duplicate detection.
+            ['row' => 3, 'question' => QuestionCsv::buildQuestion([
+                'question_text' => $firstText . '   ',
+                'question_type' => 'multiple_choice',
+                'option_a' => 'Option A',
+                'option_b' => 'Option B',
+                'correct_answer' => 'A',
+            ])],
+            ['row' => 4, 'question' => QuestionCsv::buildQuestion([
+                'question_text' => $marker . ' two',
+                'question_type' => 'true_false',
+                'correct_answer' => 'TRUE',
+            ])],
+        ];
+
+        $summary = $repo->importQuestions($prepared, $actor, 1);
+        assertSame(2, $summary['imported'], 'Two new questions should be appended');
+        assertSame(1, $summary['skipped'], 'Duplicate text should be skipped');
+        assertSame(0, $summary['failed'], 'Valid rows should not fail');
+
+        $rows = $db->prepare('SELECT question_id, visibility, approval_status, owner_user_id
+            FROM questions WHERE question_text LIKE :marker ORDER BY question_id ASC');
+        $rows->execute(['marker' => $marker . '%']);
+        $created = $rows->fetchAll(PDO::FETCH_ASSOC);
+        assertSame(2, count($created), 'Only non-duplicate rows are stored');
+
+        $versionStmt = $db->prepare('SELECT COUNT(*) FROM question_versions WHERE question_id = :id');
+        foreach ($created as $row) {
+            assertSame('private', $row['visibility'], 'Imported bank questions stay private');
+            assertSame('draft', $row['approval_status'], 'Imported bank questions start as drafts');
+            assertSame(990111, (int) $row['owner_user_id'], 'Importer owns the new question');
+            $versionStmt->execute(['id' => $row['question_id']]);
+            assertSame(1, (int) $versionStmt->fetchColumn(), 'Each import creates its first version');
+        }
+
+        $optionStmt = $db->prepare('SELECT COUNT(*) FROM question_bank_options WHERE question_id = :id');
+        $optionStmt->execute(['id' => $created[0]['question_id']]);
+        assertSame(2, (int) $optionStmt->fetchColumn(), 'Multiple choice options are imported');
+
+        $exportRows = $repo->questionsForExport(['q' => $marker], $actor);
+        assertSame(2, count($exportRows), 'Export only returns visible questions');
+        assertContains('option_a', QuestionCsv::serialize($exportRows), 'Export uses the canonical CSV header');
+    } finally {
+        if ($db->inTransaction()) {
+            $db->rollBack();
+        }
+    }
 });

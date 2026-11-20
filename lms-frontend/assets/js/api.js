@@ -559,6 +559,23 @@ const QuizAPI = {
  */
 const QuestionBankAPI = {
     getQuestions: (params) => API.get(API_ENDPOINTS.QUESTION_BANK_QUESTIONS, params),
+    importQuestions: (formData) => API.upload(API_ENDPOINTS.QUESTION_BANK_QUESTION_IMPORT, formData),
+    exportQuestions: (params) => {
+        const query = new URLSearchParams();
+        Object.keys(params || {}).forEach(function (key) {
+            const value = params[key];
+            if (value !== null && value !== undefined && value !== '') query.set(key, value);
+        });
+        const suffix = query.toString();
+        return API.download(
+            API_ENDPOINTS.QUESTION_BANK_QUESTION_EXPORT + (suffix ? '?' + suffix : ''),
+            'question-bank-questions.csv'
+        );
+    },
+    downloadImportTemplate: () => API.download(
+        API_ENDPOINTS.QUESTION_BANK_QUESTION_IMPORT_TEMPLATE,
+        'question-bank-questions-import-template.csv'
+    ),
     createQuestion: (data) => API.post(API_ENDPOINTS.QUESTION_BANK_QUESTIONS, data),
     getQuestion: (id) => API.get(API_ENDPOINTS.QUESTION_BANK_QUESTION(id)),
     updateQuestion: (id, data) => API.put(API_ENDPOINTS.QUESTION_BANK_QUESTION(id), data),

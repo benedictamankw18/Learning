@@ -366,6 +366,9 @@ return [
     // Phase 1C: central question bank (taxonomy, approval, versions)
     'GET /question-bank/questions' => ['controller' => 'QuestionBankController', 'method' => 'index', 'auth' => true],
     'POST /question-bank/questions' => ['controller' => 'QuestionBankController', 'method' => 'create', 'auth' => true],
+    'POST /question-bank/questions/import' => ['controller' => 'QuestionBankController', 'method' => 'importQuestions', 'auth' => true],
+    'GET /question-bank/questions/export' => ['controller' => 'QuestionBankController', 'method' => 'exportQuestions', 'auth' => true],
+    'GET /question-bank/questions/import-template' => ['controller' => 'QuestionBankController', 'method' => 'importTemplate', 'auth' => true],
     'GET /question-bank/questions/{id}' => ['controller' => 'QuestionBankController', 'method' => 'show', 'auth' => true],
     'PUT /question-bank/questions/{id}' => ['controller' => 'QuestionBankController', 'method' => 'update', 'auth' => true],
     'POST /question-bank/questions/{id}/submit-for-approval' => ['controller' => 'QuestionBankController', 'method' => 'submitForApproval', 'auth' => true],

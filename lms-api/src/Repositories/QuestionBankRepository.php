@@ -517,6 +517,167 @@ class QuestionBankRepository
     }
 
     /**
+     * Rows for CSV export, including options and only what the actor may see.
+     *
+     * @param array<string,mixed> $filters
+     * @return array<int,array<string,mixed>>
+     */
+    public function questionsForExport(array $filters, array $actor): array
+    {
+        [$visibility, $params] = $this->visibilityClause($actor);
+
+        $sql = "SELECT q.* FROM questions q WHERE {$visibility}";
+
+        foreach (['category_id', 'subject_id', 'topic_id'] as $field) {
+            if (isset($filters[$field]) && (int) $filters[$field] > 0) {
+                $sql .= " AND q.{$field} = :{$field}";
+                $params[$field] = (int) $filters[$field];
+            }
+        }
+        foreach (['visibility', 'approval_status'] as $field) {
+            if (!empty($filters[$field])) {
+                $sql .= " AND q.{$field} = :{$field}";
+                $params[$field] = (string) $filters[$field];
+            }
+        }
+        if (isset($filters['is_archived'])) {
+            $sql .= " AND q.is_archived = :is_archived";
+            $params['is_archived'] = (int) ((bool) $filters['is_archived']);
+        } elseif (!AccessControl::isAdmin($actor) && !AccessControl::isSuperAdmin($actor)) {
+            $sql .= " AND q.is_archived = 0";
+        }
+        if (!empty($filters['q'])) {
+            $sql .= " AND q.question_text LIKE :search";
+            $params['search'] = '%' . $this->escapeLike((string) $filters['q']) . '%';
+        }
+
+        $sql .= " ORDER BY q.question_id ASC";
+
+        $stmt = $this->db->prepare($sql);
+        foreach ($params as $key => $value) {
+            $stmt->bindValue(':' . $key, $value, is_int($value) ? PDO::PARAM_INT : PDO::PARAM_STR);
+        }
+        $stmt->execute();
+        $questions = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        $optionStmt = $this->db->prepare("
+            SELECT option_label, option_text, is_correct
+            FROM question_bank_options
+            WHERE question_id = :id
+            ORDER BY option_label ASC
+        ");
+        foreach ($questions as $index => $question) {
+            $optionStmt->execute(['id' => (int) $question['question_id']]);
+            $questions[$index]['options'] = $optionStmt->fetchAll(PDO::FETCH_ASSOC);
+        }
+
+        return $questions;
+    }
+
+    /**
+     * Append prepared CSV rows to the bank.
+     *
+     * Duplicate text (among questions the actor can already see) is skipped.
+     * Every created question stays private/draft and gets its first immutable
+     * version through createQuestion(), so imported content follows the same
+     * approval path as manually authored bank questions.
+     *
+     * @param array<int,array{row:int,question:array<string,mixed>}> $prepared
+     * @return array{imported:int,skipped:int,failed:int,results:array<int,array<string,mixed>>}
+     */
+    public function importQuestions(array $prepared, array $actor, int $institutionId): array
+    {
+        [$visibility, $visibilityParams] = $this->visibilityClause($actor);
+
+        $findExisting = $this->db->prepare("
+            SELECT question_id
+            FROM questions q
+            WHERE {$visibility} AND TRIM(q.question_text) = :question_text
+            ORDER BY q.question_id ASC
+            LIMIT 1
+        ");
+
+        $ownsTransaction = !$this->db->inTransaction();
+        if ($ownsTransaction) {
+            $this->db->beginTransaction();
+        }
+
+        $imported = 0;
+        $skipped = 0;
+        $failed = 0;
+        $results = [];
+
+        try {
+            foreach ($prepared as $index => $row) {
+                $rowNumber = (int) ($row['row'] ?? 0);
+                $question = is_array($row['question'] ?? null) ? $row['question'] : [];
+                $text = (string) ($question['question_text'] ?? '');
+
+                if ($text === '') {
+                    $failed++;
+                    $results[] = [
+                        'row' => $rowNumber,
+                        'status' => 'failed',
+                        'message' => 'question_text is required.',
+                    ];
+                    continue;
+                }
+
+                $lookupParams = $visibilityParams;
+                $lookupParams['question_text'] = $text;
+                $findExisting->execute($lookupParams);
+                if ($findExisting->fetchColumn() !== false) {
+                    $skipped++;
+                    $results[] = [
+                        'row' => $rowNumber,
+                        'status' => 'skipped',
+                        'message' => 'A question with this text already exists in the question bank.',
+                    ];
+                    continue;
+                }
+
+                $savepoint = 'qb_import_' . (int) $index;
+                $this->db->exec('SAVEPOINT ' . $savepoint);
+                try {
+                    $this->createQuestion($question, $actor, $institutionId);
+                    $imported++;
+                    $results[] = [
+                        'row' => $rowNumber,
+                        'status' => 'imported',
+                        'message' => 'Question imported as a private draft.',
+                    ];
+                    $this->db->exec('RELEASE SAVEPOINT ' . $savepoint);
+                } catch (\Throwable $e) {
+                    $this->db->exec('ROLLBACK TO SAVEPOINT ' . $savepoint);
+                    $this->db->exec('RELEASE SAVEPOINT ' . $savepoint);
+                    $failed++;
+                    $results[] = [
+                        'row' => $rowNumber,
+                        'status' => 'failed',
+                        'message' => 'Could not save this question.',
+                    ];
+                }
+            }
+
+            if ($ownsTransaction) {
+                $this->db->commit();
+            }
+        } catch (\Throwable $e) {
+            if ($ownsTransaction && $this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            throw $e;
+        }
+
+        return [
+            'imported' => $imported,
+            'skipped' => $skipped,
+            'failed' => $failed,
+            'results' => $results,
+        ];
+    }
+
+    /**
      * Create a private question directly in the bank.
      *
      * @param array<string,mixed> $data

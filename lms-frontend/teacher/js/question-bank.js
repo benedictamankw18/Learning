@@ -32,6 +32,16 @@
       filterOwnership: document.getElementById('qbFilterOwnership'),
       refreshBtn: document.getElementById('qbRefreshBtn'),
       newBtn: document.getElementById('qbNewBtn'),
+      importBtn: document.getElementById('qbImportBtn'),
+      exportBtn: document.getElementById('qbExportBtn'),
+      templateBtn: document.getElementById('qbTemplateBtn'),
+      importModal: document.getElementById('qbImportModal'),
+      importClose: document.getElementById('qbImportClose'),
+      importCancel: document.getElementById('qbImportCancelBtn'),
+      importConfirm: document.getElementById('qbImportConfirmBtn'),
+      importFile: document.getElementById('qbImportFile'),
+      importTemplateBtn: document.getElementById('qbImportTemplateBtn'),
+      importResults: document.getElementById('qbImportResults'),
       listBody: document.getElementById('qbListBody'),
       pagination: document.getElementById('qbPagination'),
 
@@ -573,6 +583,128 @@
 
   /* ---------------- Events ---------------- */
 
+  function renderCsvImportResults(data) {
+    if (!els.importResults) return;
+    const imported = Number(data.imported || 0);
+    const skipped = Number(data.skipped || 0);
+    const failed = Number(data.failed || 0);
+    const results = Array.isArray(data.results) ? data.results : [];
+    const summary = `Imported ${imported} · Skipped ${skipped} · Failed ${failed}`;
+    const rows = results.map(function (result) {
+      const status = String(result.status || 'failed').toLowerCase();
+      const safeStatus = ['imported', 'skipped', 'failed'].includes(status) ? status : 'failed';
+      return '<div class="qb-import-results-row ' + safeStatus + '">'
+        + '<strong>Row ' + escapeHtml(result.row) + ':</strong> '
+        + escapeHtml(safeStatus) + ' — ' + escapeHtml(result.message || '')
+        + '</div>';
+    }).join('');
+    els.importResults.innerHTML = '<div style="font-weight:600; margin-bottom:0.35rem">'
+      + escapeHtml(summary) + '</div>'
+      + (rows || '<p class="qb-import-hint">No row details were returned.</p>');
+    els.importResults.style.display = 'block';
+  }
+
+  function openCsvImportModal() {
+    if (els.importFile) els.importFile.value = '';
+    if (els.importResults) {
+      els.importResults.innerHTML = '';
+      els.importResults.style.display = 'none';
+    }
+    if (els.importConfirm) {
+      els.importConfirm.disabled = true;
+      els.importConfirm.textContent = 'Import Questions';
+    }
+    openModal(els.importModal);
+  }
+
+  function syncCsvImportButton() {
+    const file = els.importFile && els.importFile.files ? els.importFile.files[0] : null;
+    const isCsv = !!file && /\.csv$/i.test(file.name);
+    if (els.importConfirm) els.importConfirm.disabled = !isCsv;
+  }
+
+  async function downloadCsvTemplate() {
+    try {
+      await QuestionBankAPI.downloadImportTemplate();
+      setNotice('Import template downloaded.', 'success');
+    } catch (error) {
+      setNotice(error.message || 'Failed to download the import template.', 'error');
+    }
+  }
+
+  async function exportCsv() {
+    try {
+      await QuestionBankAPI.exportQuestions(state.filters);
+      setNotice('Questions exported as CSV.', 'success');
+    } catch (error) {
+      setNotice(error.message || 'Failed to export questions.', 'error');
+    }
+  }
+
+  async function importCsv() {
+    const file = els.importFile && els.importFile.files ? els.importFile.files[0] : null;
+    if (!file) {
+      setNotice('Choose a CSV file to import.', 'error');
+      return;
+    }
+    if (!/\.csv$/i.test(file.name)) {
+      setNotice('Please choose a .csv file.', 'error');
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append('file', file);
+    const button = els.importConfirm;
+    const originalLabel = button ? button.textContent : '';
+    if (button) {
+      button.disabled = true;
+      button.textContent = 'Importing...';
+    }
+
+    try {
+      const response = await QuestionBankAPI.importQuestions(formData);
+      const data = response && response.data ? response.data : {};
+      const imported = Number(data.imported || 0);
+      const skipped = Number(data.skipped || 0);
+      const failed = Number(data.failed || 0);
+
+      renderCsvImportResults(data);
+      setNotice(
+        `Imported ${imported}, skipped ${skipped}, failed ${failed}.`,
+        failed > 0 ? 'error' : 'success'
+      );
+      if (imported > 0) {
+        await loadQuestions();
+      }
+      if (els.importFile) els.importFile.value = '';
+    } catch (error) {
+      renderCsvImportResults({
+        imported: 0, skipped: 0, failed: 1,
+        results: [{ row: '-', status: 'failed', message: error.message || 'The import request failed.' }]
+      });
+      setNotice(error.message || 'Failed to import questions.', 'error');
+    } finally {
+      if (button) {
+        button.textContent = originalLabel || 'Import Questions';
+        syncCsvImportButton();
+      }
+    }
+  }
+
+  function bindCsvEvents() {
+    els.importBtn?.addEventListener('click', openCsvImportModal);
+    els.exportBtn?.addEventListener('click', exportCsv);
+    els.templateBtn?.addEventListener('click', downloadCsvTemplate);
+    els.importTemplateBtn?.addEventListener('click', downloadCsvTemplate);
+    els.importClose?.addEventListener('click', function () { closeModal(els.importModal); });
+    els.importCancel?.addEventListener('click', function () { closeModal(els.importModal); });
+    els.importConfirm?.addEventListener('click', importCsv);
+    els.importFile?.addEventListener('change', syncCsvImportButton);
+    els.importModal?.addEventListener('click', function (e) {
+      if (e.target === els.importModal) closeModal(els.importModal);
+    });
+  }
+
   function bindEvents() {
     els.refreshBtn?.addEventListener('click', function () { loadQuestions(); });
     els.newBtn?.addEventListener('click', function () { resetEditor(); openModal(els.editorModal); });
@@ -670,6 +802,9 @@
       bindEvents();
       state.bound = true;
     }
+    // The import modal lives in the page fragment, so its nodes are recreated
+    // on every navigation. Bind its events each time against the fresh nodes.
+    bindCsvEvents();
     state.pagination.current_page = 1;
     await loadTaxonomy();
     populateSelects();

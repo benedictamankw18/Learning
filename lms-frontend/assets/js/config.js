@@ -231,6 +231,9 @@ const API_ENDPOINTS = {
 
     // Question bank (Phase 1C)
     QUESTION_BANK_QUESTIONS: '/api/question-bank/questions',
+    QUESTION_BANK_QUESTION_IMPORT: '/api/question-bank/questions/import',
+    QUESTION_BANK_QUESTION_EXPORT: '/api/question-bank/questions/export',
+    QUESTION_BANK_QUESTION_IMPORT_TEMPLATE: '/api/question-bank/questions/import-template',
     QUESTION_BANK_QUESTION: (id) => `/api/question-bank/questions/${id}`,
     QUESTION_BANK_SUBMIT: (id) => `/api/question-bank/questions/${id}/submit-for-approval`,
     QUESTION_BANK_APPROVE: (id) => `/api/question-bank/questions/${id}/approve`,

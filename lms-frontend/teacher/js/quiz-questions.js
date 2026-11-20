@@ -36,6 +36,16 @@
     state.els.publishBtn = document.getElementById("quizQuestionsPublishBtn");
     state.els.resultsBtn = document.getElementById("quizQuestionsResultsBtn");
     state.els.exportBtn = document.getElementById("quizQuestionsExportBtn");
+    state.els.importBtn = document.getElementById("quizQuestionsImportBtn");
+    state.els.exportQuestionsBtn = document.getElementById("quizQuestionsExportQuestionsBtn");
+    state.els.templateBtn = document.getElementById("quizQuestionsTemplateBtn");
+    state.els.importModal = document.getElementById("quizQuestionsImportModal");
+    state.els.importClose = document.getElementById("quizQuestionsImportClose");
+    state.els.importCancel = document.getElementById("quizQuestionsImportCancelBtn");
+    state.els.importConfirm = document.getElementById("quizQuestionsImportConfirmBtn");
+    state.els.importFile = document.getElementById("quizQuestionsImportFile");
+    state.els.importTemplateBtn = document.getElementById("quizQuestionsImportTemplateBtn");
+    state.els.importResults = document.getElementById("quizQuestionsImportResults");
     state.els.fromBankBtn = document.getElementById("quizQuestionsFromBankBtn");
     state.els.fromBankBtn2 = document.getElementById("quizQuestionsFromBankBtn2");
     state.els.bankPickerModal = document.getElementById("quizBankPickerModal");
@@ -808,6 +818,165 @@
     }
   }
 
+  function openQuestionImportModal() {
+    if (!state.els.importModal) return;
+    if (state.els.importFile) state.els.importFile.value = "";
+    if (state.els.importResults) {
+      state.els.importResults.innerHTML = "";
+      state.els.importResults.style.display = "none";
+    }
+    if (state.els.importConfirm) {
+      state.els.importConfirm.disabled = true;
+      state.els.importConfirm.textContent = "Import Questions";
+    }
+    state.els.importModal.classList.add("open");
+    state.els.importModal.setAttribute("aria-hidden", "false");
+  }
+
+  function closeQuestionImportModal() {
+    if (!state.els.importModal) return;
+    state.els.importModal.classList.remove("open");
+    state.els.importModal.setAttribute("aria-hidden", "true");
+  }
+
+  function syncQuestionImportButton() {
+    const file = state.els.importFile && state.els.importFile.files
+      ? state.els.importFile.files[0]
+      : null;
+    const isCsv = !!file && /\.csv$/i.test(file.name);
+    if (state.els.importConfirm) state.els.importConfirm.disabled = !isCsv;
+  }
+
+  function renderQuestionImportResults(data) {
+    const target = state.els.importResults;
+    if (!target) return;
+
+    const imported = Number(data.imported || 0);
+    const skipped = Number(data.skipped || 0);
+    const failed = Number(data.failed || 0);
+    const results = Array.isArray(data.results) ? data.results : [];
+    const summary = `Imported ${imported} · Skipped ${skipped} · Failed ${failed}`;
+
+    const rows = results.map((result) => {
+      const status = String(result.status || "failed").toLowerCase();
+      const safeStatus = ["imported", "skipped", "failed"].includes(status) ? status : "failed";
+      return `<div class="tqq-import-results-row ${safeStatus}">
+        <strong>Row ${escapeHtml(result.row)}:</strong>
+        ${escapeHtml(safeStatus)} — ${escapeHtml(result.message || "")}
+      </div>`;
+    }).join("");
+
+    target.innerHTML = `<div style="font-weight:600; margin-bottom:0.35rem">${escapeHtml(summary)}</div>`
+      + (rows || '<div class="tqq-import-hint">No row details were returned.</div>');
+    target.style.display = "block";
+  }
+
+  async function downloadQuestionImportTemplate() {
+    if (!state.quizId) {
+      setNotice("Missing quiz ID. Open this page from the quizzes list.", "error");
+      return;
+    }
+    try {
+      await QuizAPI.downloadImportTemplate(state.quizId);
+      setNotice("Import template downloaded.", "success");
+    } catch (error) {
+      setNotice(error.message || "Failed to download the import template.", "error");
+    }
+  }
+
+  async function exportQuestionsCsv() {
+    if (!state.quizId) {
+      setNotice("Missing quiz ID. Open this page from the quizzes list.", "error");
+      return;
+    }
+    try {
+      await QuizAPI.exportQuestions(state.quizId);
+      setNotice("Questions exported as CSV.", "success");
+    } catch (error) {
+      setNotice(error.message || "Failed to export questions.", "error");
+    }
+  }
+
+  async function importQuestionsCsv() {
+    const file = state.els.importFile && state.els.importFile.files
+      ? state.els.importFile.files[0]
+      : null;
+
+    if (!state.quizId) {
+      setNotice("Missing quiz ID. Open this page from the quizzes list.", "error");
+      return;
+    }
+    if (!file) {
+      setNotice("Choose a CSV file to import.", "error");
+      return;
+    }
+    if (!/\.csv$/i.test(file.name)) {
+      setNotice("Please choose a .csv file.", "error");
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append("file", file);
+
+    const button = state.els.importConfirm;
+    const originalLabel = button ? button.textContent : "";
+    if (button) {
+      button.disabled = true;
+      button.textContent = "Importing...";
+    }
+
+    try {
+      const response = await QuizAPI.importQuestions(state.quizId, formData);
+      const data = response && response.data ? response.data : {};
+      const imported = Number(data.imported || 0);
+      const skipped = Number(data.skipped || 0);
+      const failed = Number(data.failed || 0);
+
+      renderQuestionImportResults(data);
+      setNotice(`Imported ${imported}, skipped ${skipped}, failed ${failed}.`, failed > 0 ? "error" : "success");
+
+      if (imported > 0) {
+        await loadQuestions();
+      }
+      if (state.els.importFile) {
+        state.els.importFile.value = "";
+      }
+    } catch (error) {
+      renderQuestionImportResults({
+        imported: 0,
+        skipped: 0,
+        failed: 1,
+        results: [{
+          row: "-",
+          status: "failed",
+          message: error.message || "The import request failed."
+        }]
+      });
+      setNotice(error.message || "Failed to import questions.", "error");
+    } finally {
+      if (button) {
+        button.textContent = originalLabel || "Import Questions";
+        syncQuestionImportButton();
+      }
+    }
+  }
+
+  function bindCsvEvents() {
+    if (state.els.importBtn) state.els.importBtn.addEventListener("click", openQuestionImportModal);
+    if (state.els.exportQuestionsBtn) state.els.exportQuestionsBtn.addEventListener("click", exportQuestionsCsv);
+    if (state.els.templateBtn) state.els.templateBtn.addEventListener("click", downloadQuestionImportTemplate);
+    if (state.els.importClose) state.els.importClose.addEventListener("click", closeQuestionImportModal);
+    if (state.els.importCancel) state.els.importCancel.addEventListener("click", closeQuestionImportModal);
+    if (state.els.importConfirm) state.els.importConfirm.addEventListener("click", importQuestionsCsv);
+    if (state.els.importTemplateBtn) state.els.importTemplateBtn.addEventListener("click", downloadQuestionImportTemplate);
+    if (state.els.importFile) state.els.importFile.addEventListener("change", syncQuestionImportButton);
+    if (state.els.importModal) {
+      state.els.importModal.addEventListener("click", (e) => {
+        if (e.target === state.els.importModal) closeQuestionImportModal();
+      });
+    }
+  }
+
   function bindBankPickerEvents() {
     [state.els.fromBankBtn, state.els.fromBankBtn2].forEach((btn) => {
       if (btn) btn.addEventListener("click", openBankPicker);
@@ -884,9 +1053,11 @@
       state.initialized = true;
     }
 
-    // The picker modal lives in the page fragment, so its nodes are recreated
-    // on every navigation. Bind its events each time against the fresh nodes.
+    // The picker and CSV modals live in the page fragment, so their nodes are
+    // recreated on every navigation. Bind their events each time against the
+    // fresh nodes.
     bindBankPickerEvents();
+    bindCsvEvents();
 
     resetForm();
     state.expandedQuestionId = null;

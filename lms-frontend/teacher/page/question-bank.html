@@ -82,6 +82,26 @@
   .qb-version h4 { margin: 0 0 0.4rem; font-size: 0.9rem; }
   .qb-version p { margin: 0.2rem 0; font-size: 0.8rem; color: #475569; }
   .qb-text-preview { max-width: 320px; }
+  .qb-import-field { display: flex; flex-direction: column; gap: 0.4rem; }
+  .qb-import-field label { font-size: 0.78rem; font-weight: 600; color: #334155; }
+  .qb-import-field input[type="file"] {
+    border: 1px solid #cbd5e1; border-radius: 8px; padding: 0.5rem;
+    font-size: 0.85rem; background: #fff; color: #0f172a;
+  }
+  .qb-import-hint { margin: 0; font-size: 0.75rem; color: #64748b; line-height: 1.45; }
+  .qb-import-results {
+    display: none; max-height: 220px; overflow-y: auto;
+    border: 1px solid #e2e8f0; border-radius: 10px;
+    padding: 0.6rem 0.7rem; background: #f8fafc;
+  }
+  .qb-import-results-row {
+    padding: 0.3rem 0; border-bottom: 1px solid #e2e8f0;
+    font-size: 0.8rem; line-height: 1.4;
+  }
+  .qb-import-results-row:last-child { border-bottom: none; }
+  .qb-import-results-row.imported { color: #065f46; }
+  .qb-import-results-row.skipped { color: #92400e; }
+  .qb-import-results-row.failed { color: #991b1b; }
   @media (max-width: 720px) {
     .qb-form-grid { grid-template-columns: 1fr; }
     .qb-form-grid .full { grid-column: 1; }
@@ -140,6 +160,15 @@
           </button>
           <button id="qbNewBtn" class="qb-btn qb-btn-primary" type="button">
             <i class="fas fa-plus"></i> New Question
+          </button>
+          <button id="qbImportBtn" class="qb-btn qb-btn-secondary" type="button">
+            <i class="fas fa-upload"></i> Import
+          </button>
+          <button id="qbExportBtn" class="qb-btn qb-btn-secondary" type="button">
+            <i class="fas fa-download"></i> Export
+          </button>
+          <button id="qbTemplateBtn" class="qb-btn qb-btn-secondary" type="button">
+            <i class="fas fa-file-download"></i> CSV Template
           </button>
         </div>
       </div>
@@ -282,6 +311,43 @@
     <div class="qb-modal-footer">
       <button id="qbQuizCancel" class="qb-btn qb-btn-secondary" type="button">Cancel</button>
       <button id="qbQuizConfirm" class="qb-btn qb-btn-primary" type="button">Add to Quiz</button>
+    </div>
+  </div>
+</div>
+
+<!-- CSV import modal -->
+<div id="qbImportModal" class="qb-modal-overlay" aria-hidden="true">
+  <div class="qb-modal" style="width: min(560px, 100%);">
+    <div class="qb-modal-header">
+      <h3><i class="fas fa-upload"></i> Import Questions</h3>
+      <button id="qbImportClose" class="qb-btn qb-btn-secondary qb-btn-sm" type="button" aria-label="Close">&times;</button>
+    </div>
+    <div class="qb-modal-body">
+      <div class="qb-import-field">
+        <label for="qbImportFile">CSV file</label>
+        <input id="qbImportFile" type="file" accept=".csv,text/csv" />
+        <p class="qb-import-hint">
+          Up to 500 questions per file. Questions are added as private drafts
+          and must be submitted for approval before they can be shared. Rows
+          whose text already exists in your bank are skipped.
+        </p>
+      </div>
+      <div class="qb-import-field">
+        <button id="qbImportTemplateBtn" class="qb-btn qb-btn-secondary" type="button">
+          <i class="fas fa-download"></i> Download CSV Template
+        </button>
+        <p class="qb-import-hint">
+          The template explains every column and includes sample rows to replace
+          or delete.
+        </p>
+      </div>
+      <div id="qbImportResults" class="qb-import-results"></div>
+    </div>
+    <div class="qb-modal-footer">
+      <button id="qbImportCancelBtn" class="qb-btn qb-btn-secondary" type="button">Close</button>
+      <button id="qbImportConfirmBtn" class="qb-btn qb-btn-primary" type="button" disabled>
+        Import Questions
+      </button>
     </div>
   </div>
 </div>

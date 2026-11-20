@@ -5,6 +5,7 @@ namespace App\Controllers;
 use App\Middleware\RoleMiddleware;
 use App\Repositories\QuestionBankRepository;
 use App\Security\AccessControl;
+use App\Utils\QuestionCsv;
 use App\Utils\Response;
 use App\Utils\Validator;
 
@@ -37,7 +38,7 @@ class QuestionBankController
     private function institutionFor(array $user, array $body = []): int
     {
         if (AccessControl::isSuperAdmin($user)) {
-            $candidate = $body['institution_id'] ?? $_GET['institution_id'] ?? null;
+            $candidate = $body['institution_id'] ?? $_POST['institution_id'] ?? $_GET['institution_id'] ?? null;
 
             return (int) $candidate;
         }
@@ -394,6 +395,235 @@ class QuestionBankController
         }
 
         Response::success(['versions' => $this->repo->listVersions($id)]);
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* CSV import / export                                                 */
+    /* ------------------------------------------------------------------ */
+
+    /**
+     * POST /question-bank/questions/import
+     *
+     * Appends CSV rows as private drafts in the actor's bank. Duplicate text
+     * is skipped; validation failures are reported per row.
+     */
+    public function importQuestions(array $user): void
+    {
+        $this->requireBankRole($user);
+        $institutionId = $this->requireInstitution($user);
+
+        $contents = $this->readUploadedCsv();
+        if ($contents === null) {
+            return; // readUploadedCsv already sent the error response
+        }
+
+        $parsed = QuestionCsv::parse($contents);
+        if (!empty($parsed['error'])) {
+            Response::error((string) $parsed['error'], 422);
+            return;
+        }
+        if (empty($parsed['rows'])) {
+            Response::error('The CSV file has a header but no question rows', 422);
+            return;
+        }
+
+        $prepared = [];
+        $results = [];
+        $invalid = 0;
+
+        foreach ($parsed['rows'] as $row) {
+            $rowNumber = (int) $row['row'];
+            try {
+                $question = QuestionCsv::buildQuestion($row['data']);
+                if ($question['image_question'] !== null) {
+                    $question['image_question'] = $this->normalizeImageQuestionPath($question['image_question']);
+                }
+                $prepared[] = ['row' => $rowNumber, 'question' => $question];
+            } catch (\Exception $e) {
+                $invalid++;
+                $results[] = [
+                    'row' => $rowNumber,
+                    'status' => 'failed',
+                    'message' => $e->getMessage(),
+                ];
+            }
+        }
+
+        $imported = 0;
+        $skipped = 0;
+        $failed = $invalid;
+
+        if ($prepared !== []) {
+            $summary = $this->repo->importQuestions($prepared, $user, $institutionId);
+            $imported = (int) $summary['imported'];
+            $skipped = (int) $summary['skipped'];
+            $failed += (int) $summary['failed'];
+            $results = array_merge($results, $summary['results']);
+        }
+
+        usort($results, static fn ($a, $b) => ((int) $a['row']) <=> ((int) $b['row']));
+
+        Response::success([
+            'message' => sprintf(
+                'Imported %d question%s. Skipped %d duplicate%s. Failed %d row%s.',
+                $imported,
+                $imported === 1 ? '' : 's',
+                $skipped,
+                $skipped === 1 ? '' : 's',
+                $failed,
+                $failed === 1 ? '' : 's'
+            ),
+            'imported' => $imported,
+            'skipped' => $skipped,
+            'failed' => $failed,
+            'total_rows' => count($parsed['rows']),
+            'results' => $results,
+        ]);
+    }
+
+    /**
+     * GET /question-bank/questions/export
+     *
+     * Exports the questions the current user can see, honouring the same
+     * filters as the bank list page.
+     */
+    public function exportQuestions(array $user): void
+    {
+        $this->requireBankRole($user);
+
+        $filters = [
+            'category_id' => $_GET['category_id'] ?? null,
+            'subject_id' => $_GET['subject_id'] ?? null,
+            'topic_id' => $_GET['topic_id'] ?? null,
+            'visibility' => $_GET['visibility'] ?? null,
+            'approval_status' => $_GET['approval_status'] ?? null,
+            'is_archived' => isset($_GET['is_archived']) ? (int) $_GET['is_archived'] : null,
+            'q' => trim((string) ($_GET['q'] ?? '')),
+        ];
+
+        $csv = QuestionCsv::serialize($this->repo->questionsForExport($filters, $user));
+        $this->streamCsv($csv, 'question-bank-questions-' . date('Y-m-d-His') . '.csv');
+    }
+
+    /**
+     * GET /question-bank/questions/import-template
+     */
+    public function importTemplate(array $user): void
+    {
+        $this->requireBankRole($user);
+        $this->streamCsv(QuestionCsv::template(), 'question-bank-questions-import-template.csv');
+    }
+
+    /**
+     * Validate and read the uploaded CSV file.
+     *
+     * Returns the file contents, or null after sending an error response.
+     */
+    private function readUploadedCsv(): ?string
+    {
+        if (!isset($_FILES['file']) || !is_array($_FILES['file'])) {
+            Response::error('No CSV file uploaded', 400);
+            return null;
+        }
+
+        $file = $_FILES['file'];
+        $uploadError = (int) ($file['error'] ?? UPLOAD_ERR_NO_FILE);
+        if ($uploadError !== UPLOAD_ERR_OK) {
+            Response::error($this->describeUploadError($uploadError), 400);
+            return null;
+        }
+
+        $tmpName = (string) ($file['tmp_name'] ?? '');
+        $originalName = (string) ($file['name'] ?? '');
+        $size = (int) ($file['size'] ?? 0);
+
+        if ($tmpName === '' || !is_uploaded_file($tmpName)) {
+            Response::error('The uploaded file could not be read', 400);
+            return null;
+        }
+        if (strtolower(pathinfo($originalName, PATHINFO_EXTENSION)) !== 'csv') {
+            Response::error('Please upload a .csv file', 422);
+            return null;
+        }
+        if ($size <= 0) {
+            Response::error('The uploaded CSV file is empty', 422);
+            return null;
+        }
+        if ($size > QuestionCsv::MAX_FILE_BYTES) {
+            Response::error('The CSV file is too large (maximum 2 MB)', 422);
+            return null;
+        }
+
+        $contents = file_get_contents($tmpName);
+        if (!is_string($contents) || trim($contents) === '') {
+            Response::error('The uploaded CSV file is empty', 422);
+            return null;
+        }
+
+        return $contents;
+    }
+
+    private function describeUploadError(int $code): string
+    {
+        switch ($code) {
+            case UPLOAD_ERR_INI_SIZE:
+            case UPLOAD_ERR_FORM_SIZE:
+                return 'The CSV file is too large';
+            case UPLOAD_ERR_PARTIAL:
+                return 'The CSV file was only partially uploaded';
+            case UPLOAD_ERR_NO_FILE:
+                return 'No CSV file uploaded';
+            case UPLOAD_ERR_NO_TMP_DIR:
+                return 'The server has no temporary folder for uploads';
+            case UPLOAD_ERR_CANT_WRITE:
+                return 'The server could not write the uploaded file';
+            case UPLOAD_ERR_EXTENSION:
+                return 'A server extension stopped the upload';
+            default:
+                return 'The CSV file could not be uploaded';
+        }
+    }
+
+    private function streamCsv(string $csv, string $filename): void
+    {
+        header('Content-Type: text/csv; charset=utf-8');
+        header('Content-Disposition: attachment; filename="' . $filename . '"');
+        header('Cache-Control: no-store, no-cache, must-revalidate');
+        header('Pragma: no-cache');
+
+        // UTF-8 BOM so Excel opens non-ASCII text correctly. QuestionCsv::parse
+        // strips it again on import.
+        echo "\xEF\xBB\xBF" . $csv;
+        exit;
+    }
+
+    private function normalizeImageQuestionPath($value): ?string
+    {
+        if (!is_string($value)) {
+            return null;
+        }
+
+        $path = trim($value);
+        if ($path === '') {
+            return null;
+        }
+        if (preg_match('#^https?://#i', $path)) {
+            return $path;
+        }
+        if (strpos($path, '/api/uploads/') === 0) {
+            return '/api/upload/' . substr($path, strlen('/api/uploads/'));
+        }
+        if (strpos($path, '/api/upload/') === 0) {
+            return $path;
+        }
+        if (strpos($path, '/uploads/') === 0) {
+            return '/api/upload' . substr($path, strlen('/uploads'));
+        }
+        if (strpos($path, '/') === false) {
+            return '/api/upload/quiz-questions/' . $path;
+        }
+
+        return $path;
     }
 
     /* ------------------------------------------------------------------ */

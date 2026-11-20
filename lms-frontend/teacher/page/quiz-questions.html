@@ -375,6 +375,27 @@
           >
             <i class="fas fa-file-csv"></i> Export Results
           </button>
+          <button
+            id="quizQuestionsImportBtn"
+            class="tqq-btn-secondary"
+            type="button"
+          >
+            <i class="fas fa-upload"></i> Import Questions
+          </button>
+          <button
+            id="quizQuestionsExportQuestionsBtn"
+            class="tqq-btn-secondary"
+            type="button"
+          >
+            <i class="fas fa-download"></i> Export Questions
+          </button>
+          <button
+            id="quizQuestionsTemplateBtn"
+            class="tqq-btn-secondary"
+            type="button"
+          >
+            <i class="fas fa-file-download"></i> CSV Template
+          </button>
         </div>
       </div>
 
@@ -624,6 +645,30 @@
   }
   .tqq-picker-item .tqq-picker-text { font-size: 0.85rem; flex: 1; }
   .tqq-picker-item .tqq-picker-meta { font-size: 0.72rem; color: #64748b; }
+  .tqq-import-field { display: flex; flex-direction: column; gap: 0.4rem; }
+  .tqq-import-field label { font-size: 0.78rem; font-weight: 600; color: #334155; }
+  .tqq-import-field input[type="file"] {
+    border: 1px solid #cbd5e1; border-radius: 8px; padding: 0.5rem;
+    font-size: 0.85rem; background: #fff; color: #0f172a;
+  }
+  .tqq-import-hint { margin: 0; font-size: 0.75rem; color: #64748b; line-height: 1.45; }
+  .tqq-import-results {
+    display: none; max-height: 220px; overflow-y: auto;
+    border: 1px solid #e2e8f0; border-radius: 10px;
+    padding: 0.6rem 0.7rem; background: #f8fafc;
+  }
+  .tqq-import-results-row {
+    padding: 0.3rem 0; border-bottom: 1px solid #e2e8f0;
+    font-size: 0.8rem; line-height: 1.4;
+  }
+  .tqq-import-results-row:last-child { border-bottom: none; }
+  .tqq-import-results-row.imported { color: #065f46; }
+  .tqq-import-results-row.skipped { color: #92400e; }
+  .tqq-import-results-row.failed { color: #991b1b; }
+  .tqq-import-foot {
+    display: flex; justify-content: flex-end; gap: 0.5rem;
+    padding: 1rem 1.25rem; border-top: 1px solid #e2e8f0;
+  }
 </style>
 
 <div id="quizBankPickerModal" class="tqq-picker-overlay">
@@ -637,6 +682,42 @@
       <div id="quizBankPickerList" class="tqq-picker-list">
         <div class="tqq-loading">Loading questions...</div>
       </div>
+    </div>
+  </div>
+</div>
+
+<div id="quizQuestionsImportModal" class="tqq-picker-overlay" aria-hidden="true">
+  <div class="tqq-picker-modal">
+    <div class="tqq-picker-header">
+      <h3><i class="fas fa-upload"></i> Import Questions</h3>
+      <button id="quizQuestionsImportClose" class="tqq-btn-secondary" type="button" aria-label="Close">&times;</button>
+    </div>
+    <div class="tqq-picker-body">
+      <div class="tqq-import-field">
+        <label for="quizQuestionsImportFile">CSV file</label>
+        <input id="quizQuestionsImportFile" type="file" accept=".csv,text/csv" />
+        <p class="tqq-import-hint">
+          Up to 500 questions per file. Questions whose text already exists in
+          this quiz are skipped. Rows that fail validation are reported and do
+          not stop the rest of the file.
+        </p>
+      </div>
+      <div class="tqq-import-field" style="margin-top: 1rem;">
+        <button id="quizQuestionsImportTemplateBtn" class="tqq-btn-secondary" type="button">
+          <i class="fas fa-download"></i> Download CSV Template
+        </button>
+        <p class="tqq-import-hint">
+          The template explains every column and includes sample rows to replace
+          or delete.
+        </p>
+      </div>
+      <div id="quizQuestionsImportResults" class="tqq-import-results"></div>
+    </div>
+    <div class="tqq-import-foot">
+      <button id="quizQuestionsImportCancelBtn" class="tqq-btn-secondary" type="button">Close</button>
+      <button id="quizQuestionsImportConfirmBtn" class="tqq-btn-primary" type="button" disabled>
+        Import Questions
+      </button>
     </div>
   </div>
 </div>
