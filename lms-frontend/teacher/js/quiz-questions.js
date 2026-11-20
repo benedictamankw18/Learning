@@ -92,8 +92,16 @@
       return;
     }
 
+    const safeType = ["success", "error", "info"].includes(type) ? type : "success";
     state.els.notice.textContent = message;
-    state.els.notice.className = "tqq-note show " + (type === "error" ? "error" : "success");
+    state.els.notice.className = "tqq-note show " + safeType;
+  }
+
+  function withBusyButton(button, label, task, options) {
+    if (typeof withButtonLoading === "function") {
+      return withButtonLoading(button, label, task, options);
+    }
+    return task();
   }
 
   function updateSubtitle() {
@@ -455,15 +463,17 @@
   async function submitQuestion(event) {
     event.preventDefault();
 
-    try {
-      setNotice("");
-      const payload = collectPayloadFromForm();
-      const questionId = state.els.questionId.value;
+    const questionId = String(state.els.questionId.value || "").trim();
+    setNotice(questionId ? "Updating question..." : "Adding question...", "info");
 
-      const uploadedImageUrl = await uploadQuestionImage();
-      if (uploadedImageUrl) {
-        payload.image_question = uploadedImageUrl;
-        payload.image_name = uploadedImageUrl;
+    try {
+      await withBusyButton(state.els.submitBtn, questionId ? "Updating..." : "Adding...", async function () {
+        const payload = collectPayloadFromForm();
+        const uploadedImageUrl = await uploadQuestionImage();
+
+        if (uploadedImageUrl) {
+          payload.image_question = uploadedImageUrl;
+          payload.image_name = uploadedImageUrl;
         } else if (questionId) {
           const existingQuestion = state.questions.find((item) => String(item.id) === String(questionId));
           if (existingQuestion && existingQuestion.image_question) {
@@ -471,45 +481,49 @@
             payload.image_question = normalizedExistingImage;
             payload.image_name = normalizedExistingImage;
           }
-      }
+        }
 
-      let response;
-      if (questionId) {
-        response = await QuizAPI.updateQuestion(questionId, payload, state.quizId);
-      } else {
-        response = await QuizAPI.addQuestion(state.quizId, payload);
-      }
+        let response;
+        if (questionId) {
+          response = await QuizAPI.updateQuestion(questionId, payload, state.quizId);
+        } else {
+          response = await QuizAPI.addQuestion(state.quizId, payload);
+        }
 
-      if (!response || !response.success) {
-        throw new Error(response && response.message ? response.message : "Failed to save question");
-      }
+        if (!response || !response.success) {
+          throw new Error(response && response.message ? response.message : "Failed to save question");
+        }
+
+        await loadQuestions();
+      });
 
       resetForm();
-      await loadQuestions();
       setNotice(questionId ? "Question updated." : "Question added.", "success");
     } catch (error) {
       setNotice(error.message || "Could not save question.", "error");
     }
   }
 
-  async function deleteQuestion(questionId) {
+  async function deleteQuestion(questionId, button) {
     if (!window.confirm("Delete this question?")) {
       return;
     }
 
+    setNotice("Deleting question...", "info");
     try {
-      setNotice("");
-      const response = await QuizAPI.deleteQuestion(questionId, state.quizId);
-      if (!response || !response.success) {
-        throw new Error(response && response.message ? response.message : "Delete failed");
-      }
+      await withBusyButton(button, "Deleting...", async function () {
+        const response = await QuizAPI.deleteQuestion(questionId, state.quizId);
+        if (!response || !response.success) {
+          throw new Error(response && response.message ? response.message : "Delete failed");
+        }
+
+        state.expandedQuestionId = null;
+        await loadQuestions();
+      });
 
       if (state.els.questionId.value && String(state.els.questionId.value) === String(questionId)) {
         resetForm();
       }
-
-      state.expandedQuestionId = null;
-      await loadQuestions();
       setNotice("Question deleted.", "success");
     } catch (error) {
       setNotice(error.message || "Could not delete question.", "error");
@@ -554,6 +568,7 @@
     state.questions = updated;
     renderQuestionList();
 
+    setNotice("Saving question order...", "info");
     try {
       await persistOrder();
       setNotice("Question order updated.", "success");
@@ -574,7 +589,7 @@
       : '<i class="fas fa-paper-plane"></i> Publish';
   }
 
-  async function togglePublish() {
+  async function togglePublish(button) {
     if (!state.quiz) {
       return;
     }
@@ -584,16 +599,20 @@
       status: isPublished ? "draft" : "active",
       is_activated: isPublished ? 0 : 1
     };
+    const actionLabel = isPublished ? "Unpublishing..." : "Publishing...";
 
+    setNotice(isPublished ? "Moving quiz to draft..." : "Publishing quiz...", "info");
     try {
-      setNotice("");
-      const response = await QuizAPI.update(state.quizId, payload);
-      if (!response || !response.success) {
-        throw new Error(response && response.message ? response.message : "Publish update failed");
-      }
+      await withBusyButton(button, actionLabel, async function () {
+        const response = await QuizAPI.update(state.quizId, payload);
+        if (!response || !response.success) {
+          throw new Error(response && response.message ? response.message : "Publish update failed");
+        }
 
-      state.quiz.status = payload.status;
-      state.quiz.is_activated = payload.is_activated;
+        state.quiz.status = payload.status;
+        state.quiz.is_activated = payload.is_activated;
+      });
+
       syncPublishButton();
       updateSubtitle();
       setNotice(!isPublished ? "Quiz published." : "Quiz moved to draft.", "success");
@@ -637,29 +656,31 @@
     URL.revokeObjectURL(url);
   }
 
-  async function exportResults() {
+  async function exportResults(button) {
+    setNotice("Preparing results export...", "info");
     try {
-      setNotice("");
-      const response = await QuizAPI.getResults(state.quizId);
-      if (!response || !response.success) {
-        throw new Error(response && response.message ? response.message : "Failed to fetch results");
-      }
+      await withBusyButton(button, "Exporting...", async function () {
+        const response = await QuizAPI.getResults(state.quizId);
+        if (!response || !response.success) {
+          throw new Error(response && response.message ? response.message : "Failed to fetch results");
+        }
 
-      const submissions = (response.data && response.data.submissions) || [];
-      if (!submissions.length) {
-        throw new Error("No results available to export.");
-      }
+        const submissions = (response.data && response.data.submissions) || [];
+        if (!submissions.length) {
+          throw new Error("No results available to export.");
+        }
 
-      exportResultsCsv(submissions);
+        exportResultsCsv(submissions);
+      });
       setNotice("Results exported.", "success");
     } catch (error) {
       setNotice(error.message || "Export failed.", "error");
     }
   }
 
-  function onQuestionListClick(event) {
+  async function onQuestionListClick(event) {
     const button = event.target.closest("button[data-action]");
-    if (!button) {
+    if (!button || button.disabled) {
       return;
     }
 
@@ -675,12 +696,16 @@
     }
 
     if (action === "edit") {
-      fillFormForEdit(questionId);
+      setNotice("Opening question...", "info");
+      await withBusyButton(button, "Opening...", function () {
+        fillFormForEdit(questionId);
+      });
+      setNotice("Question loaded into editor.", "success");
       return;
     }
 
     if (action === "delete") {
-      deleteQuestion(questionId);
+      await deleteQuestion(questionId, button);
     }
   }
 
@@ -784,15 +809,18 @@
     }).join("");
   }
 
-  async function linkBankQuestion(questionId) {
+  async function linkBankQuestion(questionId, button) {
+    setNotice("Linking question...", "info");
     try {
-      const response = await QuizAPI.linkExistingQuestion(state.quizId, questionId);
-      if (!response || !response.success) {
-        throw new Error(response && response.message ? response.message : "Failed to link question");
-      }
-      closeBankPicker();
-      setNotice("Question linked from bank", "success");
-      await loadQuestions();
+      await withBusyButton(button, "Linking...", async function () {
+        const response = await QuizAPI.linkExistingQuestion(state.quizId, questionId);
+        if (!response || !response.success) {
+          throw new Error(response && response.message ? response.message : "Failed to link question");
+        }
+        closeBankPicker();
+        await loadQuestions();
+      });
+      setNotice("Question linked from bank.", "success");
     } catch (error) {
       setNotice(error.message || "Unable to link question.", "error");
     }
@@ -851,26 +879,32 @@
     target.style.display = "block";
   }
 
-  async function downloadQuestionImportTemplate() {
+  async function downloadQuestionImportTemplate(button) {
     if (!state.quizId) {
       setNotice("Missing quiz ID. Open this page from the quizzes list.", "error");
       return;
     }
+    setNotice("Preparing CSV template...", "info");
     try {
-      await QuizAPI.downloadImportTemplate(state.quizId);
+      await withBusyButton(button, "Preparing...", function () {
+        return QuizAPI.downloadImportTemplate(state.quizId);
+      });
       setNotice("Import template downloaded.", "success");
     } catch (error) {
       setNotice(error.message || "Failed to download the import template.", "error");
     }
   }
 
-  async function exportQuestionsCsv() {
+  async function exportQuestionsCsv(button) {
     if (!state.quizId) {
       setNotice("Missing quiz ID. Open this page from the quizzes list.", "error");
       return;
     }
+    setNotice("Exporting questions...", "info");
     try {
-      await QuizAPI.exportQuestions(state.quizId);
+      await withBusyButton(button, "Exporting...", function () {
+        return QuizAPI.exportQuestions(state.quizId);
+      });
       setNotice("Questions exported as CSV.", "success");
     } catch (error) {
       setNotice(error.message || "Failed to export questions.", "error");
@@ -897,30 +931,25 @@
 
     const formData = new FormData();
     formData.append("file", file);
-
-    const button = state.els.importConfirm;
-    const originalLabel = button ? button.textContent : "";
-    if (button) {
-      button.disabled = true;
-      button.textContent = "Importing...";
-    }
+    setNotice("Importing questions...", "info");
 
     try {
-      const response = await QuizAPI.importQuestions(state.quizId, formData);
+      const response = await withBusyButton(state.els.importConfirm, "Importing...", function () {
+        return QuizAPI.importQuestions(state.quizId, formData);
+      });
       const data = response && response.data ? response.data : {};
       const imported = Number(data.imported || 0);
       const skipped = Number(data.skipped || 0);
       const failed = Number(data.failed || 0);
 
       renderQuestionImportResults(data);
-      setNotice(`Imported ${imported}, skipped ${skipped}, failed ${failed}.`, failed > 0 ? "error" : "success");
-
       if (imported > 0) {
         await loadQuestions();
       }
       if (state.els.importFile) {
         state.els.importFile.value = "";
       }
+      setNotice(`Imported ${imported}, skipped ${skipped}, failed ${failed}.`, failed > 0 ? "error" : "success");
     } catch (error) {
       renderQuestionImportResults({
         imported: 0,
@@ -934,21 +963,24 @@
       });
       setNotice(error.message || "Failed to import questions.", "error");
     } finally {
-      if (button) {
-        button.textContent = originalLabel || "Import Questions";
-        syncQuestionImportButton();
-      }
+      syncQuestionImportButton();
     }
   }
 
   function bindCsvEvents() {
     if (state.els.importBtn) state.els.importBtn.addEventListener("click", openQuestionImportModal);
-    if (state.els.exportQuestionsBtn) state.els.exportQuestionsBtn.addEventListener("click", exportQuestionsCsv);
-    if (state.els.templateBtn) state.els.templateBtn.addEventListener("click", downloadQuestionImportTemplate);
+    if (state.els.exportQuestionsBtn) state.els.exportQuestionsBtn.addEventListener("click", function () {
+      exportQuestionsCsv(state.els.exportQuestionsBtn);
+    });
+    if (state.els.templateBtn) state.els.templateBtn.addEventListener("click", function () {
+      downloadQuestionImportTemplate(state.els.templateBtn);
+    });
     if (state.els.importClose) state.els.importClose.addEventListener("click", closeQuestionImportModal);
     if (state.els.importCancel) state.els.importCancel.addEventListener("click", closeQuestionImportModal);
     if (state.els.importConfirm) state.els.importConfirm.addEventListener("click", importQuestionsCsv);
-    if (state.els.importTemplateBtn) state.els.importTemplateBtn.addEventListener("click", downloadQuestionImportTemplate);
+    if (state.els.importTemplateBtn) state.els.importTemplateBtn.addEventListener("click", function () {
+      downloadQuestionImportTemplate(state.els.importTemplateBtn);
+    });
     if (state.els.importFile) state.els.importFile.addEventListener("change", syncQuestionImportButton);
     if (state.els.importModal) {
       state.els.importModal.addEventListener("click", (e) => {
@@ -979,7 +1011,7 @@
     if (state.els.bankPickerList) {
       state.els.bankPickerList.addEventListener("click", (e) => {
         const btn = e.target.closest('button[data-action="link"]');
-        if (btn) linkBankQuestion(btn.dataset.id);
+        if (btn && !btn.disabled) linkBankQuestion(btn.dataset.id, btn);
       });
     }
   }
@@ -1004,8 +1036,8 @@
       window.location.hash = "#quiz-details?id=" + state.quizId;
     });
 
-    state.els.publishBtn.addEventListener("click", togglePublish);
-    state.els.exportBtn.addEventListener("click", exportResults);
+    state.els.publishBtn.addEventListener("click", function () { togglePublish(state.els.publishBtn); });
+    state.els.exportBtn.addEventListener("click", function () { exportResults(state.els.exportBtn); });
 
     state.els.questionListBody.addEventListener("click", onQuestionListClick);
     state.els.questionListBody.addEventListener("dragstart", onDragStart);

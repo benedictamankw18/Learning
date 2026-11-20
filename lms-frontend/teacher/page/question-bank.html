@@ -27,6 +27,11 @@
   .qb-notice { padding: 0.6rem 0.75rem; border-radius: 8px; font-size: 0.85rem; display: none; }
   .qb-notice.error { display: block; background: #fef2f2; color: #b91c1c; }
   .qb-notice.success { display: block; background: #ecfdf5; color: #047857; }
+  .qb-notice.info { display: block; background: #eff6ff; color: #1d4ed8; }
+  .qb-btn:disabled, .tqq-btn-primary:disabled, .tqq-btn-secondary:disabled, .qb-pagination button:disabled {
+    opacity: 0.6; cursor: not-allowed;
+  }
+  .qb-btn.is-busy, .tqq-btn-primary.is-busy, .tqq-btn-secondary.is-busy { pointer-events: none; }
   .qb-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
   .qb-table th, .qb-table td {
     text-align: left; padding: 0.55rem 0.6rem; border-bottom: 1px solid #e2e8f0;

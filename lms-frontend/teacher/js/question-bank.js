@@ -93,8 +93,16 @@
       els.notice.textContent = '';
       return;
     }
-    els.notice.className = 'qb-notice ' + (type || 'success');
+    const safeType = ['success', 'error', 'info'].includes(type) ? type : 'success';
+    els.notice.className = 'qb-notice ' + safeType;
     els.notice.textContent = message;
+  }
+
+  function withBusyButton(button, label, task, options) {
+    if (typeof withButtonLoading === 'function') {
+      return withButtonLoading(button, label, task, options);
+    }
+    return task();
   }
 
   function normalizeRows(response, key) {
@@ -293,12 +301,14 @@
       };
       renderTable();
       renderPagination();
-      setNotice('');
+      // Keep any status message set by the action that triggered this reload.
+      return true;
     } catch (error) {
       if (els.listBody) {
         els.listBody.innerHTML = '<tr><td colspan="5" class="qb-empty">Failed to load questions.</td></tr>';
       }
       setNotice(error.message || 'Unable to load questions.', 'error');
+      return false;
     }
   }
 
@@ -417,6 +427,7 @@
   async function fillEditor(question) {
     let full = question || {};
     const questionId = Number(full.question_id || full.id || 0);
+    setNotice('Opening question...', 'info');
 
     if (questionId) {
       try {
@@ -473,6 +484,7 @@
 
     if (els.submitBtn) els.submitBtn.textContent = 'Update Question';
     updateFormByType();
+    setNotice(questionId ? 'Question loaded into editor.' : 'Question loaded.', 'success');
     scrollToEditor();
   }
 
@@ -569,49 +581,59 @@
   async function submitQuestion(event) {
     if (event) event.preventDefault();
 
+    const questionId = Number(els.questionId && els.questionId.value) || 0;
+    setNotice(questionId ? 'Updating question...' : 'Creating question...', 'info');
+
     try {
-      setNotice('');
-      const payload = collectPayloadFromForm();
-      const questionId = Number(els.questionId && els.questionId.value) || 0;
-      const uploadedUrl = await uploadQuestionImage();
+      await withBusyButton(els.submitBtn, questionId ? 'Updating...' : 'Creating...', async function () {
+        const payload = collectPayloadFromForm();
+        const uploadedUrl = await uploadQuestionImage();
 
-      if (uploadedUrl) {
-        payload.image_question = uploadedUrl;
-        payload.image_name = uploadedUrl;
-      } else if (questionId) {
-        const existingUrl = state.editingImageUrl || (function () {
-          const existing = state.questions.find(function (item) {
-            return Number(item.question_id) === questionId;
-          });
-          return existing ? toAccessibleImageUrl(existing.image_question) : '';
-        })();
-        if (existingUrl) {
-          payload.image_question = existingUrl;
-          payload.image_name = existingUrl;
+        if (uploadedUrl) {
+          payload.image_question = uploadedUrl;
+          payload.image_name = uploadedUrl;
+        } else if (questionId) {
+          const existingUrl = state.editingImageUrl || (function () {
+            const existing = state.questions.find(function (item) {
+              return Number(item.question_id) === questionId;
+            });
+            return existing ? toAccessibleImageUrl(existing.image_question) : '';
+          })();
+          if (existingUrl) {
+            payload.image_question = existingUrl;
+            payload.image_name = existingUrl;
+          }
         }
-      }
 
-      if (questionId) {
-        await QuestionBankAPI.updateQuestion(questionId, payload);
-        showToast('Question updated', 'success');
-      } else {
-        await QuestionBankAPI.createQuestion(payload);
-        showToast('Question created', 'success');
-      }
+        if (questionId) {
+          await QuestionBankAPI.updateQuestion(questionId, payload);
+          showToast('Question updated', 'success');
+        } else {
+          await QuestionBankAPI.createQuestion(payload);
+          showToast('Question created', 'success');
+        }
+
+        await loadQuestions();
+      });
 
       resetEditor();
-      await loadQuestions();
       setNotice(questionId ? 'Question updated.' : 'Question created.', 'success');
     } catch (error) {
       setNotice(error.message || 'Unable to save question.', 'error');
     }
   }
 
-  async function archiveQuestion(id, archived) {
+  async function archiveQuestion(id, archived, button) {
+    const isArchived = archived === 'true' || archived === true;
+    setNotice(isArchived ? 'Restoring question...' : 'Archiving question...', 'info');
+
     try {
-      await QuestionBankAPI.archive(id, archived === 'true' || archived === true ? false : true);
-      showToast(archived ? 'Question restored' : 'Question archived', 'success');
-      await loadQuestions();
+      await withBusyButton(button, isArchived ? 'Restoring...' : 'Archiving...', async function () {
+        await QuestionBankAPI.archive(id, isArchived ? false : true);
+        showToast(isArchived ? 'Question restored' : 'Question archived', 'success');
+        await loadQuestions();
+      });
+      setNotice(isArchived ? 'Question restored.' : 'Question archived.', 'success');
     } catch (error) {
       setNotice(error.message || 'Unable to update question.', 'error');
     }
@@ -698,11 +720,15 @@
       return;
     }
 
+    setNotice('Adding question to quiz...', 'info');
     try {
-      await QuizAPI.linkExistingQuestion(quizId, state.pendingQuizQuestionId);
-      showToast('Question added to quiz', 'success');
-      closeModal(els.quizModal);
-      state.pendingQuizQuestionId = null;
+      await withBusyButton(els.quizConfirm, 'Adding...', async function () {
+        await QuizAPI.linkExistingQuestion(quizId, state.pendingQuizQuestionId);
+        showToast('Question added to quiz', 'success');
+        closeModal(els.quizModal);
+        state.pendingQuizQuestionId = null;
+      });
+      setNotice('Question added to quiz.', 'success');
     } catch (error) {
       setNotice(error.message || 'Unable to add question to quiz.', 'error');
     }
@@ -751,18 +777,24 @@
     if (els.importConfirm) els.importConfirm.disabled = !isCsv;
   }
 
-  async function downloadCsvTemplate() {
+  async function downloadCsvTemplate(button) {
+    setNotice('Preparing CSV template...', 'info');
     try {
-      await QuestionBankAPI.downloadImportTemplate();
+      await withBusyButton(button, 'Preparing...', function () {
+        return QuestionBankAPI.downloadImportTemplate();
+      });
       setNotice('Import template downloaded.', 'success');
     } catch (error) {
       setNotice(error.message || 'Failed to download the import template.', 'error');
     }
   }
 
-  async function exportCsv() {
+  async function exportCsv(button) {
+    setNotice('Exporting questions...', 'info');
     try {
-      await QuestionBankAPI.exportQuestions(state.filters);
+      await withBusyButton(button, 'Exporting...', function () {
+        return QuestionBankAPI.exportQuestions(state.filters);
+      });
       setNotice('Questions exported as CSV.', 'success');
     } catch (error) {
       setNotice(error.message || 'Failed to export questions.', 'error');
@@ -782,27 +814,24 @@
 
     const formData = new FormData();
     formData.append('file', file);
-    const button = els.importConfirm;
-    const originalLabel = button ? button.textContent : '';
-    if (button) {
-      button.disabled = true;
-      button.textContent = 'Importing...';
-    }
+    setNotice('Importing questions...', 'info');
 
     try {
-      const response = await QuestionBankAPI.importQuestions(formData);
+      const response = await withBusyButton(els.importConfirm, 'Importing...', function () {
+        return QuestionBankAPI.importQuestions(formData);
+      });
       const data = response && response.data ? response.data : {};
       const imported = Number(data.imported || 0);
       const skipped = Number(data.skipped || 0);
       const failed = Number(data.failed || 0);
 
       renderCsvImportResults(data);
+      if (imported > 0) await loadQuestions();
+      if (els.importFile) els.importFile.value = '';
       setNotice(
         'Imported ' + imported + ', skipped ' + skipped + ', failed ' + failed + '.',
         failed > 0 ? 'error' : 'success'
       );
-      if (imported > 0) await loadQuestions();
-      if (els.importFile) els.importFile.value = '';
     } catch (error) {
       renderCsvImportResults({
         imported: 0, skipped: 0, failed: 1,
@@ -810,18 +839,15 @@
       });
       setNotice(error.message || 'Failed to import questions.', 'error');
     } finally {
-      if (button) {
-        button.textContent = originalLabel || 'Import Questions';
-        syncCsvImportButton();
-      }
+      syncCsvImportButton();
     }
   }
 
   function bindCsvEvents() {
     els.importBtn?.addEventListener('click', openCsvImportModal);
-    els.exportBtn?.addEventListener('click', exportCsv);
-    els.templateBtn?.addEventListener('click', downloadCsvTemplate);
-    els.importTemplateBtn?.addEventListener('click', downloadCsvTemplate);
+    els.exportBtn?.addEventListener('click', function () { exportCsv(els.exportBtn); });
+    els.templateBtn?.addEventListener('click', function () { downloadCsvTemplate(els.templateBtn); });
+    els.importTemplateBtn?.addEventListener('click', function () { downloadCsvTemplate(els.importTemplateBtn); });
     els.importClose?.addEventListener('click', function () { closeModal(els.importModal); });
     els.importCancel?.addEventListener('click', function () { closeModal(els.importModal); });
     els.importConfirm?.addEventListener('click', importCsv);
@@ -834,7 +860,15 @@
   /* ---------------- Events ---------------- */
 
   function bindEvents() {
-    els.refreshBtn?.addEventListener('click', function () { loadQuestions(); });
+    els.refreshBtn?.addEventListener('click', async function () {
+      setNotice('Refreshing questions...', 'info');
+      try {
+        const refreshed = await withBusyButton(els.refreshBtn, 'Refreshing...', function () { return loadQuestions(); });
+        if (refreshed !== false) setNotice('Questions refreshed.', 'success');
+      } catch (error) {
+        setNotice(error.message || 'Unable to refresh questions.', 'error');
+      }
+    });
     els.newBtn?.addEventListener('click', function () { resetEditor({ scroll: true }); });
     els.clearBtn?.addEventListener('click', function () { resetEditor({ scroll: false }); });
     els.form?.addEventListener('submit', submitQuestion);
@@ -869,17 +903,21 @@
       loadQuestions();
     });
 
-    els.listBody?.addEventListener('click', function (event) {
+    els.listBody?.addEventListener('click', async function (event) {
       const button = event.target.closest('button[data-action]');
-      if (!button) return;
+      if (!button || button.disabled) return;
       const id = Number(button.getAttribute('data-id'));
       const action = button.getAttribute('data-action');
       const question = state.questions.find(function (item) {
         return Number(item.question_id) === id;
       });
-      if (action === 'edit' && question) fillEditor(question);
-      else if (action === 'archive') archiveQuestion(id, button.getAttribute('data-archived'));
-      else if (action === 'addtoquiz') openQuizModal(id);
+      if (action === 'edit' && question) {
+        await withBusyButton(button, 'Opening...', function () { return fillEditor(question); });
+      } else if (action === 'archive') {
+        await archiveQuestion(id, button.getAttribute('data-archived'), button);
+      } else if (action === 'addtoquiz') {
+        openQuizModal(id);
+      }
     });
 
     els.quizClose?.addEventListener('click', function () { closeModal(els.quizModal); });

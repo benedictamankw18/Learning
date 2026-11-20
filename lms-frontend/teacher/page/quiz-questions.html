@@ -78,6 +78,27 @@
     border: 1px solid #a7f3d0;
   }
 
+  .tqq-note.info {
+    background: #eff6ff;
+    color: #1d4ed8;
+    border: 1px solid #bfdbfe;
+  }
+
+  .tqq-btn-primary:disabled,
+  .tqq-btn-secondary:disabled,
+  .tqq-btn-danger:disabled,
+  .tqq-icon:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+
+  .tqq-btn-primary.is-busy,
+  .tqq-btn-secondary.is-busy,
+  .tqq-btn-danger.is-busy,
+  .tqq-icon.is-busy {
+    pointer-events: none;
+  }
+
   .tqq-note.error {
     background: #fef2f2;
     color: #991b1b;

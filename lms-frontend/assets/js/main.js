@@ -110,6 +110,75 @@ function showNotification(message, type = 'success') {
     showToast(message, type);
 }
 
+/**
+ * Temporarily put a button into a visible busy state.
+ * Returns a one-shot restore function so callers can use it in finally blocks.
+ */
+function setButtonLoading(button, busyLabel, options) {
+    if (!button) {
+        return function () {};
+    }
+
+    const settings = options || {};
+    if (button.dataset.loading === 'true') {
+        return function () {};
+    }
+
+    const originalHtml = button.innerHTML;
+    const originalDisabled = button.disabled;
+    const originalAriaBusy = button.getAttribute('aria-busy');
+
+    button.dataset.loading = 'true';
+    button.classList.add('is-busy');
+    button.disabled = true;
+    button.setAttribute('aria-busy', 'true');
+    button.textContent = '';
+
+    if (settings.spinner !== false) {
+        const spinner = document.createElement('i');
+        spinner.className = 'fas fa-spinner fa-spin';
+        spinner.setAttribute('aria-hidden', 'true');
+        button.appendChild(spinner);
+        button.appendChild(document.createTextNode(' '));
+    }
+    button.appendChild(document.createTextNode(String(busyLabel || 'Working...')));
+
+    let restored = false;
+    return function restoreButton() {
+        if (restored) {
+            return;
+        }
+        restored = true;
+
+        button.innerHTML = originalHtml;
+        button.disabled = originalDisabled;
+        if (originalAriaBusy === null) {
+            button.removeAttribute('aria-busy');
+        } else {
+            button.setAttribute('aria-busy', originalAriaBusy);
+        }
+        button.classList.remove('is-busy');
+        delete button.dataset.loading;
+    };
+}
+
+/**
+ * Run an async task with a busy button and always restore the button.
+ */
+async function withButtonLoading(button, busyLabel, task, options) {
+    const restoreButton = setButtonLoading(button, busyLabel, options);
+    try {
+        return await task();
+    } finally {
+        restoreButton();
+    }
+}
+
+if (typeof window !== 'undefined') {
+    window.setButtonLoading = setButtonLoading;
+    window.withButtonLoading = withButtonLoading;
+}
+
  // Notification bell toggle
     const notificationBell = document.getElementById('notificationBell');
     const notificationDropdown = document.getElementById('notificationDropdown');
