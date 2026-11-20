@@ -1,0 +1,166 @@
+# Production stack for the Learning LMS on the Ubuntu VM.
+# Install as /opt/learning/docker-compose.yml
+#
+# MariaDB tag mariadb:10.11.19 was verified against Docker Hub on 2026-11-20.
+# For stronger reproducibility, replace it with its amd64 digest after your first
+# successful test pull:  docker buildx imagetools inspect mariadb:10.11.19
+
+services:
+  db:
+    image: mariadb:10.11.19
+    container_name: learning-db
+    restart: unless-stopped
+
+    # .env.docker must contain BOTH the DB_* keys (for reference) and the
+    # MYSQL_* keys that the MariaDB image actually reads.
+    env_file: .env.docker
+
+    volumes:
+      - db_data:/var/lib/mysql
+      - ./db/init.production:/docker-entrypoint-initdb.d:ro
+      - ./database/config/99-production.cnf:/etc/mysql/conf.d/99-production.cnf:ro
+
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -uroot -p$$MYSQL_ROOT_PASSWORD"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+
+    # No ports: block. MariaDB is reachable only on learning-network.
+
+    mem_limit: 1536m
+    cpus: 1.0
+    pids_limit: 200
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    networks:
+      - learning-network
+
+  api:
+    build: ./lms-api
+    container_name: learning-api
+    restart: unless-stopped
+    env_file: ./lms-api/.env.docker
+
+    depends_on:
+      db:
+        condition: service_healthy
+
+    ports:
+      # Debug access from the VM only. Students use the proxy on port 80.
+      - "127.0.0.1:8081:80"
+
+    volumes:
+      - ./lms-api/uploads:/var/www/html/uploads
+      - ./lms-api/logs:/var/www/html/logs
+
+    mem_limit: 1024m
+    cpus: 1.5
+    pids_limit: 150
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    networks:
+      - learning-network
+
+  frontend:
+    build:
+      context: ./lms-frontend
+      args:
+        # API origin only. The proxy routes /api/ to the API.
+        API_BASE_URL: ${API_BASE_URL:-http://lms.geslab.local}
+        APP_ENV: production
+    container_name: learning-frontend
+    restart: unless-stopped
+
+    ports:
+      # Debug access from the VM only.
+      - "127.0.0.1:8082:80"
+
+    depends_on:
+      - api
+
+    mem_limit: 256m
+    cpus: 0.25
+    pids_limit: 100
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    networks:
+      - learning-network
+
+  proxy:
+    image: nginx:alpine
+    container_name: learning-proxy
+    restart: unless-stopped
+
+    ports:
+      # Main port exposed to the 40 student computers.
+      - "80:80"
+
+    volumes:
+      - ./proxy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+
+    depends_on:
+      - api
+      - frontend
+
+    mem_limit: 128m
+    cpus: 0.25
+    pids_limit: 100
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    networks:
+      - learning-network
+
+  # MailHog is kept intentionally: there is no internet at the school, so this
+  # is the default mail destination. SMTP settings remain in the API env file
+  # so you can switch to a real provider later without changing this Compose file.
+  mailhog:
+    image: mailhog/mailhog:latest
+    container_name: learning-mailhog
+    restart: unless-stopped
+
+    ports:
+      # Web UI for viewing captured mail: http://192.168.10.196:8025
+      # Administrative use only. SMTP port 1025 is NOT published.
+      - "8025:8025"
+
+    mem_limit: 128m
+    cpus: 0.25
+    pids_limit: 100
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    networks:
+      - learning-network
+
+networks:
+  learning-network:
+    driver: bridge
+
+volumes:
+  db_data:
