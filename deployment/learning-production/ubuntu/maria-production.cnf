@@ -1,0 +1,18 @@
+# MariaDB tuning for a 4 GB Ubuntu VM shared with RDS on the Windows host.
+# Installed at /opt/learning/database/config/99-production.cnf.
+
+[mariadb]
+# Conservative buffer pool; leaves room for Apache/PHP and the host.
+innodb_buffer_pool_size=384M
+
+# Crash-safety for sudden power loss (no UPS).
+innodb_flush_log_at_trx_commit=1
+innodb_doublewrite=ON
+innodb_flush_method=O_DIRECT
+sync_binlog=1
+
+# Limit concurrency so 40 students do not exhaust the small VM.
+max_connections=60
+tmp_table_size=16M
+max_heap_table_size=16M
+performance_schema=OFF
