@@ -1,3 +1,4 @@
+// fixerMarker: 2026-11-22 quiz-share-export-results-bank-picker
 (function () {
   const state = {
     initialized: false,
@@ -817,8 +818,14 @@
         if (!response || !response.success) {
           throw new Error(response && response.message ? response.message : "Failed to link question");
         }
-        closeBankPicker();
+
+        // Keep the picker open so several questions can be linked in one go.
+        // Refresh both lists so the linked row is marked "In quiz".
+        const search = state.els.bankPickerSearch
+          ? state.els.bankPickerSearch.value.trim()
+          : "";
         await loadQuestions();
+        await loadBankPickerQuestions(search);
       });
       setNotice("Question linked from bank.", "success");
     } catch (error) {
@@ -996,11 +1003,8 @@
     if (state.els.bankPickerClose) {
       state.els.bankPickerClose.addEventListener("click", closeBankPicker);
     }
-    if (state.els.bankPickerModal) {
-      state.els.bankPickerModal.addEventListener("click", (e) => {
-        if (e.target === state.els.bankPickerModal) closeBankPicker();
-      });
-    }
+    // Do not close on backdrop clicks. The picker stays open until the user
+    // clicks the close button so multiple questions can be linked.
     if (state.els.bankPickerSearch) {
       let timer = null;
       state.els.bankPickerSearch.addEventListener("input", () => {

@@ -1,3 +1,4 @@
+// fixerMarker: 2026-11-22 quiz-share-export-results-bank-picker
 /* ============================================
    API Configuration
 ============================================ */
@@ -272,6 +273,7 @@ const API_ENDPOINTS = {
     // Quizzes
     QUIZZES: '/api/quizzes',
     QUIZ_BY_ID: (id) => `/api/quizzes/${id}`,
+    QUIZ_SHARES: (id) => `/api/quizzes/${id}/shares`,
     COURSE_QUIZZES: (courseId) => `/api/courses/${courseId}/quizzes`,
     QUIZ_QUESTIONS: (id) => `/api/quizzes/${id}/questions`,
     QUIZ_QUESTION_IMPORT: (id) => `/api/quizzes/${id}/questions/import`,

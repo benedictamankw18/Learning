@@ -1,3 +1,5 @@
+<!-- fixerMarker: 2026-11-22 quiz-share-export-results-bank-picker -->
+
 # Fresh-install database files
 
 MariaDB runs every file in `/docker-entrypoint-initdb.d/` in filename order, **only on an empty data volume**. The final set must be:
@@ -21,9 +23,10 @@ Apply the additive migration that the current schema needs:
 ```bash
 cd /opt/learning
 docker compose exec api php migrations/add_course_section_to_questions.php
+docker compose exec api php migrations/create_quiz_shares.php
 ```
 
-This adds the lesson-plan Topic / Unit / Week link and is safe on a fresh database. Then create the real super admin:
+These add the lesson-plan Topic / Unit / Week link and the Quiz Details sharing table. Both are additive and safe on a fresh database. Then create the real super admin:
 
 ```bash
 docker compose exec api php scripts/create_superadmin.php --email=ADMIN_EMAIL

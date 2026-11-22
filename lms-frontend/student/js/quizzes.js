@@ -1,3 +1,4 @@
+// fixerMarker: 2026-11-22 quiz-share-export-results-bank-picker
 /* ============================================
    Student Quizzes Module
    SPA fragment: student/page/quizzes.html
@@ -702,6 +703,21 @@
       .sort((a, b) => a.label.localeCompare(b.label));
   }
 
+  // Show review answers as "A. Dog" when the attempt snapshot has option text.
+  // Falls back to the raw value for essays, true/false, or older attempts that
+  // have no stored options.
+  function formatReviewAnswer(answer, options) {
+    const raw = String(answer == null ? '' : answer);
+    if (raw === '' || raw === '-') {
+      return raw || '-';
+    }
+
+    const label = raw.trim().toUpperCase();
+    const match = normalizeQuestionOptions({ options: options })
+      .find((opt) => opt.label === label && opt.text);
+    return match ? label + '. ' + match.text : raw;
+  }
+
   function setAnswer(questionId, answerValue) {
     if (!S.take) return;
     S.take.answers[String(questionId)] = String(answerValue || '');
@@ -1007,6 +1023,9 @@
         const qid = String(q.question_id || idx);
         const yourAnswer = String(q.student_answer != null ? q.student_answer : (answers[qid] || '-'));
         const correctAnswer = String(q.correct_answer || '-');
+        const reviewOptions = Array.isArray(q.options) ? q.options : [];
+        const yourAnswerLabel = formatReviewAnswer(yourAnswer, reviewOptions);
+        const correctAnswerLabel = formatReviewAnswer(correctAnswer, reviewOptions);
         const explanation = String(q.explanation || '-');
         const hasBackendCorrectness = q.is_correct !== undefined && q.is_correct !== null;
         const isCorrect = hasBackendCorrectness
@@ -1016,8 +1035,8 @@
         return [
           '<article class="sq-review-item">',
           '<h6>Q' + (idx + 1) + '. ' + esc(String(q.question_text || '-')) + '</h6>',
-          '<p><strong>Your Answer:</strong> ' + esc(yourAnswer) + '</p>',
-          '<p><strong>Correct Answer:</strong> ' + esc(correctAnswer) + '</p>',
+          '<p><strong>Your Answer:</strong> ' + esc(yourAnswerLabel) + '</p>',
+          '<p><strong>Correct Answer:</strong> ' + esc(correctAnswerLabel) + '</p>',
           '<p><strong>Status:</strong> ' + (isCorrect ? '<span style="color:#166534;">Correct</span>' : '<span style="color:#991b1b;">Incorrect</span>') + '</p>',
           '<p><strong>Explanation:</strong> ' + esc(explanation) + '</p>',
           '</article>'

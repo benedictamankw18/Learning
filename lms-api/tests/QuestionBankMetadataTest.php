@@ -1,5 +1,6 @@
 <?php
 
+// fixerMarker: 2026-11-22 quiz-share-export-results-bank-picker
 declare(strict_types=1);
 
 use App\Config\Database;
@@ -1017,6 +1018,81 @@ test('CSV import reuses only questions in the same teacher’s private bank', fu
         $ownerlessResult = $repo->importQuestions($quiz, $import($ownerlessText), $ownerId);
         assertSame(1, $ownerlessResult['imported'], 'A new row is imported');
         assertSame(2, $countText($ownerlessText), 'An ownerless row must not be reused');
+    } finally {
+        if ($db->inTransaction()) {
+            $db->rollBack();
+        }
+    }
+});
+
+test('Review details carry the option labels and text the attempt was served', function () {
+    $pdo = testDatabase();
+    if (!$pdo) {
+        skip('database is not reachable');
+    }
+    qmetaReady($pdo);
+    if (!testTableExists($pdo, 'quiz_submission_answers')) {
+        skip('submission answers table is not available');
+    }
+
+    $db = Database::getInstance()->getConnection();
+    $repo = new QuizRepository();
+
+    $db->beginTransaction();
+    try {
+        $quizId = questionBankQuiz($repo, $pdo, 'review options ' . uniqid());
+
+        $questionId = $repo->addQuestion([
+            'quiz_id' => $quizId,
+            'question_text' => 'Which animal barks?',
+            'question_type' => 'multiple_choice',
+            'points' => 1,
+            'correct_answer' => 'D',
+            'options' => [
+                ['label' => 'A', 'text' => 'Dog', 'is_correct' => 0],
+                ['label' => 'B', 'text' => 'Lion', 'is_correct' => 0],
+                ['label' => 'C', 'text' => 'Bird', 'is_correct' => 0],
+                ['label' => 'D', 'text' => 'Cat', 'is_correct' => 1],
+            ],
+            'actor_user_id' => 11,
+        ]);
+
+        $submissionId = 930000000 + random_int(1, 999999);
+        $db->prepare("
+            INSERT INTO quiz_submissions (submission_id, quiz_id, student_id, attempt, status)
+            VALUES (:id, :quiz_id, 0, 1, 'in_progress')
+        ")->execute(['id' => $submissionId, 'quiz_id' => $quizId]);
+
+        // This freezes the served question content, including its options.
+        $repo->ensureSubmissionQuestionOrder($submissionId, $quizId, false);
+
+        // Change the bank options after the attempt was served. Review must
+        // still show the wording the student actually saw.
+        assertTrue($repo->updateQuestion($questionId, [
+            'options' => [
+                ['label' => 'A', 'text' => 'Changed', 'is_correct' => 0],
+                ['label' => 'D', 'text' => 'Changed too', 'is_correct' => 1],
+            ],
+            'actor_user_id' => 11,
+        ], $quizId));
+
+        $db->prepare("
+            INSERT INTO quiz_submission_answers
+                (submission_id, question_id, answer, is_correct, points_earned)
+            VALUES (:sid, :qid, 'A', 0, 0)
+        ")->execute(['sid' => $submissionId, 'qid' => $questionId]);
+
+        $details = $repo->getSubmissionAnswerDetails($submissionId);
+        assertSame(1, count($details));
+
+        $servedOptions = [];
+        foreach (($details[0]['options'] ?? []) as $option) {
+            $label = strtoupper(trim((string) ($option['option_label'] ?? '')));
+            $servedOptions[$label] = (string) ($option['option_text'] ?? '');
+        }
+
+        assertSame('Dog', $servedOptions['A'] ?? null, 'Review keeps the served text for the chosen option');
+        assertSame('Cat', $servedOptions['D'] ?? null, 'Review keeps the served text for the correct option');
     } finally {
         if ($db->inTransaction()) {
             $db->rollBack();

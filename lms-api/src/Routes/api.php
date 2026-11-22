@@ -1,5 +1,6 @@
 <?php
 
+// fixerMarker: 2026-11-22 quiz-share-export-results-bank-picker
 return [
     // Auth routes (Public)
     // Public self-registration is intentionally disabled. Students are created
@@ -348,6 +349,8 @@ return [
 
     // Quiz routes
     'GET /courses/{courseId}/quizzes' => ['controller' => 'QuizController', 'method' => 'getByCourse', 'auth' => true],
+    'GET /quizzes/{id}/shares' => ['controller' => 'QuizController', 'method' => 'getShares', 'auth' => true],
+    'PUT /quizzes/{id}/shares' => ['controller' => 'QuizController', 'method' => 'saveShares', 'auth' => true],
     'GET /quizzes/{id}' => ['controller' => 'QuizController', 'method' => 'show', 'auth' => true],
     'POST /quizzes' => ['controller' => 'QuizController', 'method' => 'create', 'auth' => true],
     'PUT /quizzes/{id}' => ['controller' => 'QuizController', 'method' => 'update', 'auth' => true],
