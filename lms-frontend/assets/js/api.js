@@ -1,3 +1,4 @@
+// fixerMarker: 2026-11-22 quiz-share-export-results-bank-picker
 /* ============================================
    API Service Layer
    HTTP request wrapper with authentication
@@ -522,6 +523,8 @@ const AssessmentAPI = {
 const QuizAPI = {
     getByCourse: (courseId) => API.get(API_ENDPOINTS.COURSE_QUIZZES(courseId)),
     getById: (id) => API.get(API_ENDPOINTS.QUIZ_BY_ID(id)),
+    getShares: (id) => API.get(API_ENDPOINTS.QUIZ_SHARES(id)),
+    saveShares: (id, data) => API.put(API_ENDPOINTS.QUIZ_SHARES(id), data),
     getResults: (id) => API.get(API_ENDPOINTS.QUIZ_RESULTS(id)),
     start: (id) => API.post(API_ENDPOINTS.QUIZ_START(id), {}),
     submit: (submissionId, data) => API.post(API_ENDPOINTS.QUIZ_SUBMISSION_SUBMIT(submissionId), data),

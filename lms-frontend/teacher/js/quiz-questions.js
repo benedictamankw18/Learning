@@ -1,3 +1,5 @@
+// fixerMarker: 2026-11-22 quiz-share-export-results-bank-picker
+// fixerMarker: 2026-11-23 quiz-results-csv-total-points
 (function () {
   const state = {
     initialized: false,
@@ -624,15 +626,31 @@
   function exportResultsCsv(rows) {
     const headers = ["Submission ID", "Student Name", "Student Number", "Score", "Total Points", "Percentage", "Submitted At"];
 
-    const data = rows.map((item) => [
-      item.submission_id || "",
-      item.student_name || "",
-      item.student_number || item.student_id_number || "",
-      item.score || 0,
-      item.total_points || 0,
-      item.percentage || 0,
-      item.submitted_at || ""
-    ]);
+    const data = rows.map((item) => {
+      const scoreValue = Number(item.score) || 0;
+      const scoreCell = item.score !== undefined && item.score !== null && item.score !== "" ? item.score : 0;
+
+      const rawTotal = item.total_points !== undefined && item.total_points !== null && item.total_points !== ""
+        ? item.total_points
+        : item.max_score;
+      const totalValue = Number(rawTotal) || 0;
+      const totalCell = rawTotal !== undefined && rawTotal !== null && rawTotal !== "" ? rawTotal : 0;
+
+      const rawPercentage = item.percentage;
+      const percentageCell = rawPercentage !== undefined && rawPercentage !== null && rawPercentage !== ""
+        ? rawPercentage
+        : (totalValue > 0 ? (scoreValue / totalValue * 100).toFixed(2) : "0.00");
+
+      return [
+        item.submission_id || "",
+        item.student_name || "",
+        item.student_number || item.student_id_number || "",
+        scoreCell,
+        totalCell,
+        percentageCell,
+        item.submitted_at || ""
+      ];
+    });
 
     const toCsvCell = (value) => {
       const str = String(value == null ? "" : value);
@@ -817,8 +835,14 @@
         if (!response || !response.success) {
           throw new Error(response && response.message ? response.message : "Failed to link question");
         }
-        closeBankPicker();
+
+        // Keep the picker open so several questions can be linked in one go.
+        // Refresh both lists so the linked row is marked "In quiz".
+        const search = state.els.bankPickerSearch
+          ? state.els.bankPickerSearch.value.trim()
+          : "";
         await loadQuestions();
+        await loadBankPickerQuestions(search);
       });
       setNotice("Question linked from bank.", "success");
     } catch (error) {
@@ -996,11 +1020,8 @@
     if (state.els.bankPickerClose) {
       state.els.bankPickerClose.addEventListener("click", closeBankPicker);
     }
-    if (state.els.bankPickerModal) {
-      state.els.bankPickerModal.addEventListener("click", (e) => {
-        if (e.target === state.els.bankPickerModal) closeBankPicker();
-      });
-    }
+    // Do not close on backdrop clicks. The picker stays open until the user
+    // clicks the close button so multiple questions can be linked.
     if (state.els.bankPickerSearch) {
       let timer = null;
       state.els.bankPickerSearch.addEventListener("input", () => {

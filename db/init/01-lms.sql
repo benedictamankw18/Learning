@@ -1,3 +1,4 @@
+-- fixerMarker: 2026-11-22 quiz-share-export-results-bank-picker
 -- phpMyAdmin SQL Dump
 -- version 5.2.1
 -- https://www.phpmyadmin.net/
@@ -2145,6 +2146,22 @@ CREATE TABLE IF NOT EXISTS `quizzes` (
   KEY `idx_start_date` (`start_date`),
   KEY `idx_end_date` (`end_date`)
 ) ENGINE=InnoDB AUTO_INCREMENT=40 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--
+-- Table structure for table `quiz_shares`
+--
+-- A quiz keeps its original course_id. This table stores the additional
+-- teacher-assigned class subjects that may also see and take the quiz.
+--
+
+DROP TABLE IF EXISTS `quiz_shares`;
+CREATE TABLE IF NOT EXISTS `quiz_shares` (
+  `quiz_id` int(11) NOT NULL,
+  `course_id` int(11) NOT NULL,
+  `created_at` datetime DEFAULT current_timestamp(),
+  PRIMARY KEY (`quiz_id`,`course_id`),
+  KEY `idx_quiz_shares_course_id` (`course_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 --
 -- RELATIONSHIPS FOR TABLE `quizzes`:

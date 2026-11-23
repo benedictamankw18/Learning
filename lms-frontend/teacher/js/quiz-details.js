@@ -1,3 +1,4 @@
+// fixerMarker: 2026-11-22 quiz-share-export-results-bank-picker
 (function () {
     'use strict';
 
@@ -6,7 +7,11 @@
         quiz: null,
         questions: [],
         summary: null,
-        submissions: []
+        submissions: [],
+        shareCourses: [],
+        shareSelectedIds: [],
+        sharePrimaryCourseId: 0,
+        shareLoaded: false
     };
 
     let elements = {};
@@ -28,13 +33,20 @@
             resultsBody: document.getElementById('quizResultsBody'),
             previewBtn: document.getElementById('quizPreviewBtn'),
             publishToggleBtn: document.getElementById('quizPublishToggleBtn'),
+            shareBtn: document.getElementById('quizShareBtn'),
             exportQuestionsPdfBtn: document.getElementById('quizExportQuestionsPdfBtn'),
             exportResultsPdfBtn: document.getElementById('quizExportResultsPdfBtn'),
             exportResultsCsvBtn: document.getElementById('quizExportResultsCsvBtn'),
             previewModal: document.getElementById('quizPreviewModal'),
             previewTitle: document.getElementById('quizPreviewTitle'),
             previewBody: document.getElementById('quizPreviewBody'),
-            previewCloseBtn: document.getElementById('quizPreviewCloseBtn')
+            previewCloseBtn: document.getElementById('quizPreviewCloseBtn'),
+            shareModal: document.getElementById('quizShareModal'),
+            shareCloseBtn: document.getElementById('quizShareCloseBtn'),
+            shareCancelBtn: document.getElementById('quizShareCancelBtn'),
+            shareSaveBtn: document.getElementById('quizShareSaveBtn'),
+            shareList: document.getElementById('quizShareList'),
+            shareNotice: document.getElementById('quizShareNotice')
         };
     }
 
@@ -159,10 +171,11 @@
             }
 
             try {
+                // The cache-busted URL above is enough; explicitly setting a
+                // Cache-Control header here would force a CORS preflight.
                 const plainResponse = await fetch(candidate, {
                     method: 'GET',
-                    mode: 'cors',
-                    cache: 'no-store'
+                    mode: 'cors'
                 });
                 if (plainResponse.ok) {
                     const contentType = String(plainResponse.headers.get('content-type') || '').toLowerCase();
@@ -188,7 +201,6 @@
                 const authResponse = await fetch(candidate, {
                     method: 'GET',
                     mode: 'cors',
-                    cache: 'no-store',
                     headers: {
                         Authorization: `Bearer ${token}`
                     }
@@ -639,6 +651,200 @@
         elements.previewModal.setAttribute('aria-hidden', 'true');
     }
 
+    function getTeacherUuid() {
+        const user = (typeof Auth !== 'undefined' && Auth.getUser) ? Auth.getUser() : null;
+        return (user && (user.teacher_uuid || user.uuid)) || null;
+    }
+
+    function normalizeRows(response, key) {
+        if (!response) {
+            return [];
+        }
+        const data = response.data || response;
+        if (Array.isArray(data)) {
+            return data;
+        }
+        if (Array.isArray(data[key])) {
+            return data[key];
+        }
+        if (Array.isArray(data.rows)) {
+            return data.rows;
+        }
+        return [];
+    }
+
+    function courseLabel(course) {
+        const subject = course.subject_name || course.course_name || course.name || 'Course';
+        const className = course.class_name || '';
+        return className ? subject + ' - ' + className : subject;
+    }
+
+    function setShareNotice(message, type) {
+        if (!elements.shareNotice) {
+            return;
+        }
+        elements.shareNotice.className = 'tqd-share-notice'
+            + (message ? ' show ' + (type || 'info') : '');
+        elements.shareNotice.textContent = message || '';
+    }
+
+    function closeShareModal() {
+        if (!elements.shareModal) {
+            return;
+        }
+        elements.shareModal.classList.remove('open');
+        elements.shareModal.setAttribute('aria-hidden', 'true');
+    }
+
+    function openShareModal() {
+        if (!elements.shareModal) {
+            return;
+        }
+        elements.shareModal.classList.add('open');
+        elements.shareModal.setAttribute('aria-hidden', 'false');
+        state.shareLoaded = false;
+        if (elements.shareSaveBtn) {
+            elements.shareSaveBtn.disabled = true;
+        }
+        setShareNotice('', '');
+        if (elements.shareList) {
+            elements.shareList.innerHTML = '<div class="tqd-loading">Loading classes...</div>';
+        }
+        loadShareData();
+    }
+
+    function renderShareCourses() {
+        if (!elements.shareList) {
+            return;
+        }
+
+        if (!state.shareCourses.length) {
+            elements.shareList.innerHTML = '<div class="tqd-muted">No classes are assigned to you.</div>';
+            return;
+        }
+
+        elements.shareList.innerHTML = state.shareCourses.map((course) => {
+            const courseId = toNumber(course.course_id || course.id, 0);
+            if (!courseId) {
+                return '';
+            }
+
+            const isPrimary = courseId === state.sharePrimaryCourseId;
+            const isChecked = isPrimary || state.shareSelectedIds.includes(courseId);
+            const studentCount = toNumber(course.enrolled_students, 0);
+            const status = String(course.status || 'active');
+            const studentLabel = studentCount === 1 ? '1 student' : studentCount + ' students';
+
+            return '<label class="tqd-share-row' + (isPrimary ? ' tqd-share-original' : '') + '">'
+                + '<input type="checkbox" class="tqd-share-checkbox"'
+                + ' data-course-id="' + courseId + '"'
+                + (isChecked ? ' checked' : '')
+                + (isPrimary ? ' disabled' : '')
+                + '>'
+                + '<span class="tqd-share-label">'
+                + '<span class="tqd-share-title">' + escapeHtml(courseLabel(course)) + '</span>'
+                + '<span class="tqd-share-meta">'
+                + '<span>' + escapeHtml(studentLabel) + '</span>'
+                + '<span>Status: ' + escapeHtml(status) + '</span>'
+                + (isPrimary ? '<span class="tqd-share-badge">Original class</span>' : '')
+                + '</span>'
+                + '</span>'
+                + '</label>';
+        }).join('');
+    }
+
+    async function loadShareData() {
+        if (!state.quizId) {
+            return;
+        }
+
+        const teacherUuid = getTeacherUuid();
+        if (!teacherUuid) {
+            setShareNotice('Teacher session is missing required identifiers.', 'error');
+            if (elements.shareList) {
+                elements.shareList.innerHTML = '';
+            }
+            return;
+        }
+
+        setShareNotice('Loading sharing...', 'info');
+        try {
+            const [coursesResponse, sharesResponse] = await Promise.all([
+                TeacherAPI.getCourses(teacherUuid, { limit: 500 }),
+                QuizAPI.getShares(state.quizId)
+            ]);
+
+            const shares = (sharesResponse && sharesResponse.data) ? sharesResponse.data : sharesResponse;
+            const primaryFromQuiz = state.quiz ? state.quiz.course_id : 0;
+            state.sharePrimaryCourseId = toNumber(
+                shares && (shares.primary_course_id || shares.course_id),
+                toNumber(primaryFromQuiz, 0)
+            );
+
+            const selectedSource = shares && Array.isArray(shares.shared_course_ids)
+                ? shares.shared_course_ids
+                : ((shares && shares.course_ids) || []);
+            state.shareSelectedIds = selectedSource
+                .map((value) => toNumber(value, 0))
+                .filter((value) => value > 0 && value !== state.sharePrimaryCourseId);
+
+            state.shareCourses = normalizeRows(coursesResponse, 'courses');
+            renderShareCourses();
+            state.shareLoaded = true;
+            if (elements.shareSaveBtn) {
+                elements.shareSaveBtn.disabled = false;
+            }
+            setShareNotice('', '');
+        } catch (error) {
+            console.error('Failed to load quiz sharing:', error);
+            setShareNotice(error.message || 'Failed to load sharing.', 'error');
+            if (elements.shareList) {
+                elements.shareList.innerHTML = '';
+            }
+        }
+    }
+
+    async function saveShare() {
+        if (!state.quizId || !elements.shareList) {
+            return;
+        }
+        if (!state.shareLoaded) {
+            setShareNotice('Sharing is still loading. Please wait.', 'error');
+            return;
+        }
+
+        const selected = Array.from(elements.shareList.querySelectorAll('.tqd-share-checkbox:checked'))
+            .map((input) => toNumber(input.dataset.courseId, 0))
+            .filter((value) => value > 0);
+        if (!selected.includes(state.sharePrimaryCourseId) && state.sharePrimaryCourseId > 0) {
+            selected.push(state.sharePrimaryCourseId);
+        }
+
+        if (elements.shareSaveBtn) {
+            elements.shareSaveBtn.disabled = true;
+        }
+        setShareNotice('Saving sharing...', 'info');
+
+        try {
+            const response = await QuizAPI.saveShares(state.quizId, { course_ids: selected });
+            const data = (response && response.data) ? response.data : response;
+            const saved = data && Array.isArray(data.shared_course_ids)
+                ? data.shared_course_ids
+                : selected.filter((value) => value !== state.sharePrimaryCourseId);
+            state.shareSelectedIds = saved
+                .map((value) => toNumber(value, 0))
+                .filter((value) => value > 0 && value !== state.sharePrimaryCourseId);
+            setShareNotice('Sharing updated.', 'success');
+        } catch (error) {
+            console.error('Failed to save quiz sharing:', error);
+            setShareNotice(error.message || 'Failed to save sharing.', 'error');
+        } finally {
+            if (elements.shareSaveBtn) {
+                elements.shareSaveBtn.disabled = false;
+            }
+        }
+    }
+
     async function exportQuestionsPdf() {
         if (!state.questions.length) {
             showNotice('No questions available to export.', 'error');
@@ -736,6 +942,7 @@
                         y += drawHeight + 10.5;
                     }
                 } catch (error) {
+                    console.error('Question image could not be added to the PDF export:', imageUrl, error);
                     writeWrapped('Image unavailable for export.', 10, 20);
                 }
             }
@@ -852,6 +1059,22 @@
 
         if (elements.publishToggleBtn) {
             elements.publishToggleBtn.addEventListener('click', togglePublish);
+        }
+
+        if (elements.shareBtn) {
+            elements.shareBtn.addEventListener('click', openShareModal);
+        }
+
+        if (elements.shareCloseBtn) {
+            elements.shareCloseBtn.addEventListener('click', closeShareModal);
+        }
+
+        if (elements.shareCancelBtn) {
+            elements.shareCancelBtn.addEventListener('click', closeShareModal);
+        }
+
+        if (elements.shareSaveBtn) {
+            elements.shareSaveBtn.addEventListener('click', saveShare);
         }
 
         if (elements.previewBtn) {

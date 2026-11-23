@@ -1,5 +1,8 @@
 <?php
 
+// fixerMarker: 2026-11-22 quiz-share-export-results-bank-picker
+// fixerMarker: 2026-11-23 quiz-timer-autosubmit-fix
+// fixerMarker: 2026-11-23 quiz-results-csv-total-points
 namespace App\Repositories;
 
 use PDO;
@@ -69,11 +72,106 @@ class QuizRepository
             FROM quizzes q
             LEFT JOIN course_sections cs ON q.section_id = cs.course_sections_id
             WHERE q.course_id = :course_id
+               OR q.quiz_id IN (
+                   SELECT qs.quiz_id
+                   FROM quiz_shares qs
+                   WHERE qs.course_id = :share_course_id
+               )
             ORDER BY q.start_date DESC, q.created_at DESC
         ");
 
-        $stmt->execute(['course_id' => $courseId]);
+        $stmt->execute([
+            'course_id' => $courseId,
+            'share_course_id' => $courseId,
+        ]);
         return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+    /**
+     * Get the additional class subjects a quiz has been shared with.
+     *
+     * @return int[]
+     */
+    public function getSharedCourseIds(int $quizId): array
+    {
+        $stmt = $this->db->prepare("
+            SELECT course_id
+            FROM quiz_shares
+            WHERE quiz_id = :quiz_id
+            ORDER BY course_id ASC
+        ");
+        $stmt->execute(['quiz_id' => $quizId]);
+
+        return array_values(array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN)));
+    }
+
+    /**
+     * Get every class subject that may access a quiz, including its original course.
+     *
+     * @return int[]
+     */
+    public function getAllowedCourseIds(int $quizId): array
+    {
+        $stmt = $this->db->prepare("
+            SELECT course_id
+            FROM quizzes
+            WHERE quiz_id = :quiz_id
+        ");
+        $stmt->execute(['quiz_id' => $quizId]);
+        $primaryCourseId = (int) $stmt->fetchColumn();
+
+        if ($primaryCourseId <= 0) {
+            return [];
+        }
+
+        return array_values(array_unique(array_merge(
+            [$primaryCourseId],
+            $this->getSharedCourseIds($quizId)
+        )));
+    }
+
+    /**
+     * Replace all extra shares for a quiz in one transaction.
+     *
+     * @param int[] $courseIds
+     */
+    public function replaceShares(int $quizId, array $courseIds): bool
+    {
+        $ownsTransaction = !$this->db->inTransaction();
+        if ($ownsTransaction) {
+            $this->db->beginTransaction();
+        }
+
+        try {
+            $this->db->prepare('DELETE FROM quiz_shares WHERE quiz_id = :quiz_id')
+                ->execute(['quiz_id' => $quizId]);
+
+            $insert = $this->db->prepare("
+                INSERT INTO quiz_shares (quiz_id, course_id)
+                VALUES (:quiz_id, :course_id)
+            ");
+
+            foreach ($courseIds as $courseId) {
+                $courseId = (int) $courseId;
+                if ($courseId > 0) {
+                    $insert->execute([
+                        'quiz_id' => $quizId,
+                        'course_id' => $courseId,
+                    ]);
+                }
+            }
+
+            if ($ownsTransaction) {
+                $this->db->commit();
+            }
+
+            return true;
+        } catch (\Throwable $e) {
+            if ($ownsTransaction && $this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            throw $e;
+        }
     }
 
     /**
@@ -222,9 +320,12 @@ class QuizRepository
         }
 
         try {
-            // Links belong to the quiz, so they go with it. The bank rows
-            // themselves are kept: they may still be used by another quiz.
+            // Links and shares belong to the quiz, so they go with it. The bank
+            // rows themselves are kept: they may still be used by another quiz.
             $this->db->prepare('DELETE FROM quiz_question_links WHERE quiz_id = :id')
+                ->execute(['id' => $id]);
+
+            $this->db->prepare('DELETE FROM quiz_shares WHERE quiz_id = :id')
                 ->execute(['id' => $id]);
 
             $deleted = $this->db->prepare('DELETE FROM quizzes WHERE quiz_id = :id')
@@ -437,10 +538,17 @@ class QuizRepository
      *
      * Rejects answers to questions that were never reached and answers that
      * were changed after the student moved on. Blank captures left by older
-     * clients carry no usable answer, so they are skipped. Returns null when
-     * the answers are acceptable.
+     * clients carry no usable answer, so they are skipped. Timer auto-submits
+     * may also send blank placeholders for unanswered questions; those are
+     * skipped so a timeout cannot be mistaken for a changed answer. Returns
+     * null when the answers are acceptable.
      */
-    public function validateLockedAnswers(int $submissionId, array $answers, bool $preventBacktracking): ?string
+    public function validateLockedAnswers(
+        int $submissionId,
+        array $answers,
+        bool $preventBacktracking,
+        bool $autoSubmit = false
+    ): ?string
     {
         if (!$preventBacktracking) {
             return null;
@@ -475,6 +583,15 @@ class QuizRepository
             }
 
             $position = $positions[$questionId];
+            $submitted = $this->normalizeLockedAnswer($answer['answer'] ?? '');
+
+            // Timer auto-submit fills unanswered questions with blank
+            // placeholders. They are not attempts to change an earlier answer
+            // or to answer a question that was never reached.
+            if ($autoSubmit && $submitted === '') {
+                continue;
+            }
+
             if ($position > $furthest) {
                 return 'This answer belongs to a question that was not reached in this attempt.';
             }
@@ -491,7 +608,6 @@ class QuizRepository
                 continue;
             }
 
-            $submitted = $this->normalizeLockedAnswer($answer['answer'] ?? '');
             if ($submitted !== $captured) {
                 return 'You cannot change an answer after moving to the next question.';
             }
@@ -1661,6 +1777,12 @@ class QuizRepository
                 $row['explanation'] = $content['explanation'] ?? $row['explanation'];
                 $row['question_type'] = $content['question_type'] ?? $row['question_type'];
                 $row['points'] = $content['points'] ?? $row['points'];
+
+                // Keep the option labels/text the student was actually served so
+                // result review can show "A. Dog" instead of just "A". The
+                // snapshot/version is authoritative; never fall back to the
+                // current bank options, which may have changed since the attempt.
+                $row['options'] = $content['options'] ?? [];
             }
 
             unset($row['position'], $row['question_snapshot'], $row['link_position']);
@@ -1668,6 +1790,26 @@ class QuizRepository
         unset($row);
 
         return $rows;
+    }
+
+    /**
+     * Whether the student has an attempt still in progress for this quiz.
+     */
+    public function studentHasInProgressAttempt(int $quizId, int $studentId): bool
+    {
+        $stmt = $this->db->prepare("
+            SELECT COUNT(*)
+            FROM quiz_submissions
+            WHERE quiz_id = :quiz_id
+              AND student_id = :student_id
+              AND LOWER(COALESCE(status, '')) = 'in_progress'
+        ");
+        $stmt->execute([
+            'quiz_id' => $quizId,
+            'student_id' => $studentId,
+        ]);
+
+        return (int) $stmt->fetchColumn() > 0;
     }
 
     /**
@@ -1736,6 +1878,11 @@ class QuizRepository
                 qs.status,
                 qs.score,
                 qs.max_score,
+                qs.max_score AS total_points,
+                CASE
+                    WHEN qs.max_score > 0 THEN ROUND((qs.score / qs.max_score) * 100, 2)
+                    ELSE 0
+                END AS percentage,
                 qs.created_at AS started_at,
                 qs.submitted_at,
                 qs.graded_at,
@@ -1768,7 +1915,7 @@ class QuizRepository
      */
     public function getStudentQuizCompletionStatus(int $studentId): array
     {
-        $stmt = $this->db->prepare("\n            SELECT\n                COUNT(DISTINCT q.quiz_id) AS assigned_quizzes,\n                COUNT(DISTINCT CASE WHEN subm.status = 'submitted' THEN q.quiz_id END) AS completed_quizzes,\n                COUNT(DISTINCT CASE WHEN subm.status = 'in_progress' THEN q.quiz_id END) AS in_progress_quizzes,\n                COUNT(DISTINCT subm.submission_id) AS total_attempts\n            FROM students st\n            INNER JOIN class_subjects cs\n                ON cs.class_id = st.class_id\n               AND LOWER(COALESCE(cs.status, '')) = 'active'\n            INNER JOIN quizzes q ON q.course_id = cs.course_id\n            LEFT JOIN quiz_submissions subm\n                ON subm.quiz_id = q.quiz_id\n               AND subm.student_id = st.student_id\n            WHERE st.student_id = :student_id\n              AND LOWER(COALESCE(q.status, '')) = 'active'\n        ");
+        $stmt = $this->db->prepare("\n            SELECT\n                COUNT(DISTINCT q.quiz_id) AS assigned_quizzes,\n                COUNT(DISTINCT CASE WHEN subm.status = 'submitted' THEN q.quiz_id END) AS completed_quizzes,\n                COUNT(DISTINCT CASE WHEN subm.status = 'in_progress' THEN q.quiz_id END) AS in_progress_quizzes,\n                COUNT(DISTINCT subm.submission_id) AS total_attempts\n            FROM students st\n            INNER JOIN class_subjects cs\n                ON cs.class_id = st.class_id\n               AND LOWER(COALESCE(cs.status, '')) = 'active'\n            INNER JOIN quizzes q\n                ON q.course_id = cs.course_id\n                OR q.quiz_id IN (\n                    SELECT qs.quiz_id\n                    FROM quiz_shares qs\n                    WHERE qs.course_id = cs.course_id\n                )\n            LEFT JOIN quiz_submissions subm\n                ON subm.quiz_id = q.quiz_id\n               AND subm.student_id = st.student_id\n            WHERE st.student_id = :student_id\n              AND LOWER(COALESCE(q.status, '')) = 'active'\n        ");
 
         $stmt->execute(['student_id' => $studentId]);
         $row = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];

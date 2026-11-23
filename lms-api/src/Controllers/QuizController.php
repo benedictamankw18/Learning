@@ -1,5 +1,7 @@
 <?php
 
+// fixerMarker: 2026-11-22 quiz-share-export-results-bank-picker
+// fixerMarker: 2026-11-23 quiz-timer-autosubmit-fix
 namespace App\Controllers;
 
 use App\Repositories\QuizRepository;
@@ -59,65 +61,127 @@ class QuizController
     }
 
     /**
+     * Whether the current user may change sharing for this quiz.
+     * Mirrors the ownership rules used by UPDATE /quizzes/{id}.
+     */
+    private function canManageQuiz(array $user, array $quiz): bool
+    {
+        if (AccessControl::isSuperAdmin($user)) {
+            return true;
+        }
+
+        if ((int) ($quiz['institution_id'] ?? 0) !== AccessControl::institutionId($user)) {
+            return false;
+        }
+
+        $roleMiddleware = new RoleMiddleware($user);
+        if ($roleMiddleware->isAdmin()) {
+            return true;
+        }
+
+        return $roleMiddleware->isTeacher()
+            && (int) ($quiz['teacher_id'] ?? 0) === (int) ($user['teacher_id'] ?? 0);
+    }
+
+    /**
+     * Check student access through the original course or any shared course.
+     * An in-progress attempt may continue even if sharing was later removed.
+     */
+    private function studentCanAccessQuiz(int $quizId, int $studentId, bool $allowInProgress = true): bool
+    {
+        foreach ($this->repo->getAllowedCourseIds($quizId) as $courseId) {
+            if ($this->courseRepo->isStudentEnrolledInCourse($courseId, $studentId)) {
+                return true;
+            }
+        }
+
+        return $allowInProgress && $this->repo->studentHasInProgressAttempt($quizId, $studentId);
+    }
+
+    /**
+     * Load the original and shared courses for notification messages.
+     *
+     * @return array<int,array<string,mixed>>
+     */
+    private function getShareNotificationCourses(int $quizId): array
+    {
+        $courses = [];
+        foreach ($this->repo->getAllowedCourseIds($quizId) as $courseId) {
+            $course = $this->courseRepo->findById($courseId);
+            if ($course) {
+                $courses[$courseId] = $course;
+            }
+        }
+
+        return $courses;
+    }
+
+    /**
      * Send a one-time activation notification when a quiz becomes active.
      */
     private function notifyQuizActivated(array $quiz, array $actor): void
     {
         try {
             $quizId = (int) ($quiz['quiz_id'] ?? 0);
-            $courseId = (int) ($quiz['course_id'] ?? 0);
-            if ($quizId <= 0 || $courseId <= 0) {
+            $primaryCourseId = (int) ($quiz['course_id'] ?? 0);
+            if ($quizId <= 0 || $primaryCourseId <= 0) {
                 return;
             }
 
-            $course = $this->courseRepo->findById($courseId);
-            if (!$course) {
+            $primaryCourse = $this->courseRepo->findById($primaryCourseId);
+            if (!$primaryCourse) {
                 return;
             }
 
-            $courseName = $this->courseRepo->getNameById($courseId) ?: 'the assigned class subject';
             $quizTitle = trim((string) ($quiz['title'] ?? 'Untitled Quiz'));
-            $title = 'Quiz Activated';
-            $message = "Quiz '{$quizTitle}' is now active for {$courseName} (ID: {$courseId}).";
-
             $actorUserId = (int) ($actor['user_id'] ?? 0);
-            $institutionId = (int) ($course['institution_id'] ?? 0);
+            $institutionId = (int) ($primaryCourse['institution_id'] ?? 0);
+            $title = 'Quiz Activated';
+            $notifiedStudents = [];
 
-            $students = $this->courseRepo->getEnrolledStudents($courseId);
-            foreach ($students as $student) {
-                $studentUserId = (int) ($student['user_id'] ?? 0);
-                if ($studentUserId <= 0) {
-                    continue;
+            foreach ($this->getShareNotificationCourses($quizId) as $courseId => $course) {
+                $courseName = $this->courseRepo->getNameById($courseId) ?: 'the assigned class subject';
+                $message = "Quiz '{$quizTitle}' is now active for {$courseName} (ID: {$courseId}).";
+
+                foreach ($this->courseRepo->getEnrolledStudents($courseId) as $student) {
+                    $studentUserId = (int) ($student['user_id'] ?? 0);
+                    if ($studentUserId <= 0 || isset($notifiedStudents[$studentUserId])) {
+                        continue;
+                    }
+
+                    if ($this->notificationRepo->quizActivationExists($studentUserId, $courseId, $title, $message)) {
+                        $notifiedStudents[$studentUserId] = true;
+                        continue;
+                    }
+
+                    $this->notificationRepo->create([
+                        'sender_id' => $actorUserId,
+                        'institution_id' => $institutionId > 0 ? $institutionId : 1,
+                        'user_id' => $studentUserId,
+                        'target_role' => 'student',
+                        'course_id' => $courseId,
+                        'title' => $title,
+                        'message' => $message,
+                        'notification_type' => 'quiz_activated',
+                        'link' => '/student/dashboard.html#quizzes',
+                    ]);
+                    $notifiedStudents[$studentUserId] = true;
                 }
-
-                if ($this->notificationRepo->quizActivationExists($studentUserId, $courseId, $title, $message)) {
-                    continue;
-                }
-
-                $this->notificationRepo->create([
-                    'sender_id' => $actorUserId,
-                    'institution_id' => $institutionId > 0 ? $institutionId : 1,
-                    'user_id' => $studentUserId,
-                    'target_role' => 'student',
-                    'course_id' => $courseId,
-                    'title' => $title,
-                    'message' => $message,
-                    'notification_type' => 'quiz_activated',
-                    'link' => '/student/dashboard.html#quizzes',
-                ]);
             }
 
-            $teacherId = (int) ($course['teacher_id'] ?? 0);
+            $courseName = $this->courseRepo->getNameById($primaryCourseId) ?: 'the assigned class subject';
+            $message = "Quiz '{$quizTitle}' is now active for {$courseName} (ID: {$primaryCourseId}).";
+            $teacherId = (int) ($primaryCourse['teacher_id'] ?? 0);
             if ($teacherId > 0) {
                 $teacher = $this->teacherRepo->findById($teacherId);
                 $teacherUserId = (int) ($teacher['user_id'] ?? 0);
-                if ($teacherUserId > 0 && !$this->notificationRepo->quizActivationExists($teacherUserId, $courseId, $title, $message)) {
+                if ($teacherUserId > 0 && !$this->notificationRepo->quizActivationExists($teacherUserId, $primaryCourseId, $title, $message)) {
                     $this->notificationRepo->create([
                         'sender_id' => $actorUserId,
                         'institution_id' => $institutionId > 0 ? $institutionId : 1,
                         'user_id' => $teacherUserId,
                         'target_role' => 'teacher',
-                        'course_id' => $courseId,
+                        'course_id' => $primaryCourseId,
                         'title' => $title,
                         'message' => $message,
                         'notification_type' => 'quiz_activated',
@@ -160,31 +224,91 @@ class QuizController
 
 
     private function notifyQuizDeactivated(array $quiz, array $actor): void
-            {
-                try {
-                    $quizId = (int) ($quiz['quiz_id'] ?? 0);
-                    $courseId = (int) ($quiz['course_id'] ?? 0);
-                    if ($quizId <= 0 || $courseId <= 0) {
-                        return;
+    {
+        try {
+            $quizId = (int) ($quiz['quiz_id'] ?? 0);
+            $primaryCourseId = (int) ($quiz['course_id'] ?? 0);
+            if ($quizId <= 0 || $primaryCourseId <= 0) {
+                return;
+            }
+
+            $primaryCourse = $this->courseRepo->findById($primaryCourseId);
+            if (!$primaryCourse) {
+                return;
+            }
+
+            $quizTitle = trim((string) ($quiz['title'] ?? 'Untitled Quiz'));
+            $actorUserId = (int) ($actor['user_id'] ?? 0);
+            $institutionId = (int) ($primaryCourse['institution_id'] ?? 0);
+            $title = 'Quiz Deactivated';
+            $notifiedStudents = [];
+
+            foreach ($this->getShareNotificationCourses($quizId) as $courseId => $course) {
+                $courseName = $this->courseRepo->getNameById($courseId) ?: 'the assigned class subject';
+                $message = "Quiz '{$quizTitle}' has been deactivated for {$courseName}.";
+
+                foreach ($this->courseRepo->getEnrolledStudents($courseId) as $student) {
+                    $studentUserId = (int) ($student['user_id'] ?? 0);
+                    if ($studentUserId <= 0 || isset($notifiedStudents[$studentUserId])) {
+                        continue;
                     }
 
-                    $course = $this->courseRepo->findById($courseId);
-                    if (!$course) {
-                        return;
-                    }
+                    $this->notificationRepo->create([
+                        'sender_id' => $actorUserId,
+                        'institution_id' => $institutionId > 0 ? $institutionId : 1,
+                        'user_id' => $studentUserId,
+                        'target_role' => 'student',
+                        'course_id' => $courseId,
+                        'title' => $title,
+                        'message' => $message,
+                        'notification_type' => 'quiz_deactivated',
+                        'link' => '/student/dashboard.html#quizzes',
+                    ]);
+                    $notifiedStudents[$studentUserId] = true;
+                }
+            }
+        } catch (\Throwable $e) {
+            error_log('QuizController::notifyQuizDeactivated error: ' . $e->getMessage());
+        }
+    }
 
+            /**
+             * Notify students about upcoming or overdue quiz deadlines
+             */
+    private function notifyQuizDueDates(array $oldQuiz, array $newData, array $actor): void
+    {
+        try {
+            $quizId = (int) ($oldQuiz['quiz_id'] ?? 0);
+            $primaryCourseId = (int) ($oldQuiz['course_id'] ?? 0);
+            if ($quizId <= 0 || $primaryCourseId <= 0) {
+                return;
+            }
+
+            $primaryCourse = $this->courseRepo->findById($primaryCourseId);
+            if (!$primaryCourse) {
+                return;
+            }
+
+            $quizTitle = trim((string) ($oldQuiz['title'] ?? 'Untitled Quiz'));
+            $actorUserId = (int) ($actor['user_id'] ?? 0);
+            $institutionId = (int) ($primaryCourse['institution_id'] ?? 0);
+            $courses = $this->getShareNotificationCourses($quizId);
+
+            // Check if start_date was set or changed.
+            $oldStartDate = $oldQuiz['start_date'] ?? null;
+            $newStartDate = $newData['start_date'] ?? $oldStartDate;
+            if ($newStartDate && $newStartDate !== $oldStartDate) {
+                $title = 'Quiz Start Date Set';
+                $notifiedStudents = [];
+                foreach ($courses as $courseId => $course) {
                     $courseName = $this->courseRepo->getNameById($courseId) ?: 'the assigned class subject';
-                    $quizTitle = trim((string) ($quiz['title'] ?? 'Untitled Quiz'));
-                    $title = 'Quiz Deactivated';
-                    $message = "Quiz '{$quizTitle}' has been deactivated for {$courseName}.";
+                    $message = "Quiz '{$quizTitle}' will start on "
+                        . date('M d, Y H:i', strtotime($newStartDate))
+                        . " for {$courseName}.";
 
-                    $actorUserId = (int) ($actor['user_id'] ?? 0);
-                    $institutionId = (int) ($course['institution_id'] ?? 0);
-
-                    $students = $this->courseRepo->getEnrolledStudents($courseId);
-                    foreach ($students as $student) {
+                    foreach ($this->courseRepo->getEnrolledStudents($courseId) as $student) {
                         $studentUserId = (int) ($student['user_id'] ?? 0);
-                        if ($studentUserId <= 0) {
+                        if ($studentUserId <= 0 || isset($notifiedStudents[$studentUserId])) {
                             continue;
                         }
 
@@ -196,98 +320,51 @@ class QuizController
                             'course_id' => $courseId,
                             'title' => $title,
                             'message' => $message,
-                            'notification_type' => 'quiz_deactivated',
+                            'notification_type' => 'quiz_start_date_set',
                             'link' => '/student/dashboard.html#quizzes',
                         ]);
+                        $notifiedStudents[$studentUserId] = true;
                     }
-                } catch (\Throwable $e) {
-                    error_log('QuizController::notifyQuizDeactivated error: ' . $e->getMessage());
                 }
             }
 
-            /**
-             * Notify students about upcoming or overdue quiz deadlines
-             */
-            private function notifyQuizDueDates(array $oldQuiz, array $newData, array $actor): void
-            {
-                try {
-                    $quizId = (int) ($oldQuiz['quiz_id'] ?? 0);
-                    $courseId = (int) ($oldQuiz['course_id'] ?? 0);
-                    if ($quizId <= 0 || $courseId <= 0) {
-                        return;
-                    }
-
-                    $course = $this->courseRepo->findById($courseId);
-                    if (!$course) {
-                        return;
-                    }
-
-                    $quizTitle = trim((string) ($oldQuiz['title'] ?? 'Untitled Quiz'));
+            // Check if end_date was set or changed.
+            $oldEndDate = $oldQuiz['end_date'] ?? null;
+            $newEndDate = $newData['end_date'] ?? $oldEndDate;
+            if ($newEndDate && $newEndDate !== $oldEndDate) {
+                $title = 'Quiz Deadline Set';
+                $notifiedStudents = [];
+                foreach ($courses as $courseId => $course) {
                     $courseName = $this->courseRepo->getNameById($courseId) ?: 'the assigned class subject';
-                    $actorUserId = (int) ($actor['user_id'] ?? 0);
-                    $institutionId = (int) ($course['institution_id'] ?? 0);
+                    $message = "Quiz '{$quizTitle}' must be completed by "
+                        . date('M d, Y H:i', strtotime($newEndDate))
+                        . " for {$courseName}.";
 
-                    // Check if start_date was set or changed
-                    $oldStartDate = $oldQuiz['start_date'] ?? null;
-                    $newStartDate = $newData['start_date'] ?? $oldStartDate;
-            
-                    if ($newStartDate && $newStartDate !== $oldStartDate) {
-                        $title = 'Quiz Start Date Set';
-                        $message = "Quiz '{$quizTitle}' will start on " . date('M d, Y H:i', strtotime($newStartDate)) . " for {$courseName}.";
-
-                        $students = $this->courseRepo->getEnrolledStudents($courseId);
-                        foreach ($students as $student) {
-                            $studentUserId = (int) ($student['user_id'] ?? 0);
-                            if ($studentUserId <= 0) {
-                                continue;
-                            }
-
-                            $this->notificationRepo->create([
-                                'sender_id' => $actorUserId,
-                                'institution_id' => $institutionId > 0 ? $institutionId : 1,
-                                'user_id' => $studentUserId,
-                                'target_role' => 'student',
-                                'course_id' => $courseId,
-                                'title' => $title,
-                                'message' => $message,
-                                'notification_type' => 'quiz_start_date_set',
-                                'link' => '/student/dashboard.html#quizzes',
-                            ]);
+                    foreach ($this->courseRepo->getEnrolledStudents($courseId) as $student) {
+                        $studentUserId = (int) ($student['user_id'] ?? 0);
+                        if ($studentUserId <= 0 || isset($notifiedStudents[$studentUserId])) {
+                            continue;
                         }
+
+                        $this->notificationRepo->create([
+                            'sender_id' => $actorUserId,
+                            'institution_id' => $institutionId > 0 ? $institutionId : 1,
+                            'user_id' => $studentUserId,
+                            'target_role' => 'student',
+                            'course_id' => $courseId,
+                            'title' => $title,
+                            'message' => $message,
+                            'notification_type' => 'quiz_deadline_set',
+                            'link' => '/student/dashboard.html#quizzes',
+                        ]);
+                        $notifiedStudents[$studentUserId] = true;
                     }
-
-                    // Check if end_date was set or changed
-                    $oldEndDate = $oldQuiz['end_date'] ?? null;
-                    $newEndDate = $newData['end_date'] ?? $oldEndDate;
-            
-                    if ($newEndDate && $newEndDate !== $oldEndDate) {
-                        $title = 'Quiz Deadline Set';
-                        $message = "Quiz '{$quizTitle}' must be completed by " . date('M d, Y H:i', strtotime($newEndDate)) . " for {$courseName}.";
-
-                        $students = $this->courseRepo->getEnrolledStudents($courseId);
-                        foreach ($students as $student) {
-                            $studentUserId = (int) ($student['user_id'] ?? 0);
-                            if ($studentUserId <= 0) {
-                                continue;
-                            }
-
-                            $this->notificationRepo->create([
-                                'sender_id' => $actorUserId,
-                                'institution_id' => $institutionId > 0 ? $institutionId : 1,
-                                'user_id' => $studentUserId,
-                                'target_role' => 'student',
-                                'course_id' => $courseId,
-                                'title' => $title,
-                                'message' => $message,
-                                'notification_type' => 'quiz_deadline_set',
-                                'link' => '/student/dashboard.html#quizzes',
-                            ]);
-                        }
-                    }
-                } catch (\Throwable $e) {
-                    error_log('QuizController::notifyQuizDueDates error: ' . $e->getMessage());
                 }
             }
+        } catch (\Throwable $e) {
+            error_log('QuizController::notifyQuizDueDates error: ' . $e->getMessage());
+        }
+    }
 
             /**
              * Notify student and teacher when quiz submission status becomes 'submitted'
@@ -464,6 +541,108 @@ class QuizController
     }
 
     /**
+     * Get the classes a quiz is shared with.
+     * GET /quizzes/{id}/shares
+     */
+    public function getShares(array $user, int $id): void
+    {
+        $quiz = $this->repo->findById($id);
+        if (!$quiz) {
+            Response::notFound('Quiz not found');
+            return;
+        }
+
+        if (!$this->canManageQuiz($user, $quiz)) {
+            Response::forbidden('You can only manage sharing for your own quizzes');
+            return;
+        }
+
+        $primaryCourseId = (int) $quiz['course_id'];
+        $sharedCourseIds = $this->repo->getSharedCourseIds($id);
+
+        Response::success([
+            'quiz_id' => $id,
+            'primary_course_id' => $primaryCourseId,
+            'shared_course_ids' => $sharedCourseIds,
+            'course_ids' => array_values(array_unique(array_merge([$primaryCourseId], $sharedCourseIds))),
+        ]);
+    }
+
+    /**
+     * Replace the extra classes a quiz is shared with.
+     * PUT /quizzes/{id}/shares
+     */
+    public function saveShares(array $user, int $id): void
+    {
+        $quiz = $this->repo->findById($id);
+        if (!$quiz) {
+            Response::notFound('Quiz not found');
+            return;
+        }
+
+        if (!$this->canManageQuiz($user, $quiz)) {
+            Response::forbidden('You can only manage sharing for your own quizzes');
+            return;
+        }
+
+        $data = json_decode(file_get_contents('php://input'), true);
+        if (!is_array($data) || !isset($data['course_ids']) || !is_array($data['course_ids'])) {
+            Response::badRequest('course_ids must be an array');
+            return;
+        }
+
+        $primaryCourseId = (int) $quiz['course_id'];
+        $teacherId = (int) ($quiz['teacher_id'] ?? 0);
+        $institutionId = (int) ($quiz['institution_id'] ?? 0);
+        $selected = [];
+
+        foreach ($data['course_ids'] as $courseId) {
+            if (!is_numeric($courseId)) {
+                Response::validationError(['course_ids' => 'Every class ID must be numeric.']);
+                return;
+            }
+
+            $courseId = (int) $courseId;
+            if ($courseId <= 0 || $courseId === $primaryCourseId || isset($selected[$courseId])) {
+                continue;
+            }
+
+            $course = $this->courseRepo->findById($courseId);
+            if (!$course) {
+                Response::validationError(['course_ids' => 'One or more selected classes do not exist.']);
+                return;
+            }
+            if ((int) $course['institution_id'] !== $institutionId) {
+                Response::validationError(['course_ids' => 'A quiz cannot be shared across institutions.']);
+                return;
+            }
+            if ((int) $course['teacher_id'] !== $teacherId) {
+                Response::validationError(['course_ids' => 'You can only share with classes assigned to this quiz owner.']);
+                return;
+            }
+
+            $selected[$courseId] = $courseId;
+        }
+
+        $this->repo->replaceShares($id, array_values($selected));
+
+        $updatedQuiz = $this->repo->findById($id);
+        if ($updatedQuiz && $this->isQuizActive($updatedQuiz)) {
+            // Existing dedupe prevents repeat notifications for students who
+            // already received the activation notice for the same class.
+            $this->notifyQuizActivated($updatedQuiz, $user);
+        }
+
+        $sharedCourseIds = $this->repo->getSharedCourseIds($id);
+        Response::success([
+            'quiz_id' => $id,
+            'primary_course_id' => $primaryCourseId,
+            'shared_course_ids' => $sharedCourseIds,
+            'course_ids' => array_values(array_unique(array_merge([$primaryCourseId], $sharedCourseIds))),
+        ], 'Sharing updated');
+    }
+
+    /**
      * Get a single quiz
      * GET /quizzes/{id}
      */
@@ -494,7 +673,7 @@ class QuizController
         } elseif ($roleMiddleware->isStudent()) {
             $studentId = $this->resolveStudentId($user);
             if ($studentId === null
-                || !$this->courseRepo->isStudentEnrolledInCourse((int) $quiz['course_id'], $studentId)
+                || !$this->studentCanAccessQuiz((int) $quiz['quiz_id'], $studentId)
                 || !$this->isQuizActive($quiz)) {
                 Response::error('Quiz not found', 404);
                 return;
@@ -769,7 +948,7 @@ class QuizController
         } elseif ($roleMiddleware->isStudent()) {
             $studentId = $this->resolveStudentId($user);
             if ($studentId === null
-                || !$this->courseRepo->isStudentEnrolledInCourse((int) $quiz['course_id'], $studentId)
+                || !$this->studentCanAccessQuiz((int) $quiz['quiz_id'], $studentId)
                 || !$this->isQuizActive($quiz)) {
                 Response::error('Quiz not found', 404);
                 return;
@@ -838,7 +1017,7 @@ class QuizController
         }
 
         if (!$this->isQuizActive($quiz)
-            || !$this->courseRepo->isStudentEnrolledInCourse((int) $quiz['course_id'], $studentId)) {
+            || !$this->studentCanAccessQuiz((int) $quiz['quiz_id'], $studentId)) {
             Response::error('Quiz not found', 404);
             return;
         }
@@ -901,7 +1080,7 @@ class QuizController
         }
 
         if (!$this->isQuizActive($quiz)
-            || !$this->courseRepo->isStudentEnrolledInCourse((int) $quiz['course_id'], $studentId)) {
+            || !$this->studentCanAccessQuiz((int) $quiz['quiz_id'], $studentId)) {
             Response::error('Quiz not found', 404);
             return;
         }
@@ -964,7 +1143,7 @@ class QuizController
         }
 
         if (!$this->isQuizActive($quiz)
-            || !$this->courseRepo->isStudentEnrolledInCourse((int) $quiz['course_id'], $studentId)) {
+            || !$this->studentCanAccessQuiz((int) $quiz['quiz_id'], $studentId)) {
             Response::error('Quiz not found', 404);
             return;
         }
@@ -1607,14 +1786,16 @@ class QuizController
             return;
         }
 
-        // Check authorization (student must be enrolled)
+        // Check authorization (student must be enrolled in the original or a shared class)
         if (!AccessControl::isSuperAdmin($user)
             && (int) $quiz['institution_id'] !== AccessControl::institutionId($user)) {
             Response::error('Quiz not found', 404);
             return;
         }
 
-        if (!$this->courseRepo->isStudentEnrolledInCourse((int) $quiz['course_id'], $studentId)) {
+        // A removed share must not allow a new attempt. Existing in-progress
+        // attempts continue through the attempt-scoped endpoints.
+        if (!$this->studentCanAccessQuiz((int) $quiz['quiz_id'], $studentId, false)) {
             Response::error('Quiz not found', 404);
             return;
         }
@@ -1720,6 +1901,8 @@ class QuizController
 
         // Server-side backstop for "Prevent Going Back": a stale tab cannot
         // change an answer it already moved past, or answer an unreached question.
+        // Timer auto-submits send blank placeholders for unanswered questions;
+        // those are skipped by the validator so a timeout can still be graded.
         $quiz = $this->repo->findById((int) $submission['quiz_id']);
         if (!$quiz) {
             Response::error('Quiz not found', 404);
@@ -1729,7 +1912,8 @@ class QuizController
         $answerError = $this->repo->validateLockedAnswers(
             $id,
             $data['answers'],
-            !empty($quiz['prevent_backtracking'])
+            !empty($quiz['prevent_backtracking']),
+            !empty($data['auto_submit'])
         );
         if ($answerError !== null) {
             Response::error($answerError, 400);
@@ -1840,6 +2024,7 @@ class QuizController
                 'question_type' => $row['question_type'] ?? null,
                 'points' => $row['points'] ?? null,
                 'student_answer' => $row['student_answer'] ?? null,
+                'options' => $row['options'] ?? [],
                 'is_correct' => (int) ($row['is_correct'] ?? 0) === 1,
                 'points_earned' => $row['points_earned'] ?? null,
             ];
@@ -1919,7 +2104,7 @@ class QuizController
         }
 
         if ((int) $quiz['institution_id'] !== AccessControl::institutionId($user)
-            || !$this->courseRepo->isStudentEnrolledInCourse((int) $quiz['course_id'], $studentId)) {
+            || !$this->studentCanAccessQuiz((int) $quiz['quiz_id'], $studentId)) {
             Response::error('Quiz not found', 404);
             return;
         }

@@ -1,3 +1,4 @@
+# fixerMarker: 2026-11-22 quiz-share-export-results-bank-picker
 FROM php:8.2-apache
 
 RUN apt-get update && apt-get install -y git unzip libzip-dev default-mysql-client libonig-dev \
@@ -12,13 +13,18 @@ RUN sed -ri -e 's!/var/www/html!${APACHE_DOCUMENT_ROOT}!g' /etc/apache2/sites-av
 # - no directory listings or CGI execution
 # - script extensions are denied outright
 # - nosniff stops browsers from reinterpreting uploaded bytes as HTML/JS
-RUN a2enmod headers \
+RUN a2enmod headers setenvif \
     && printf '%s\n' \
         'Alias /uploads /var/www/html/uploads' \
         '<Directory /var/www/html/uploads>' \
         '    Options -Indexes -ExecCGI -MultiViews' \
         '    AllowOverride None' \
         '    Require all granted' \
+        '    SetEnvIfNoCase Origin "^(https?://.+)$" LMS_UPLOAD_ORIGIN=$1' \
+        '    Header always set Access-Control-Allow-Origin "%{LMS_UPLOAD_ORIGIN}e" env=LMS_UPLOAD_ORIGIN' \
+        '    Header always set Access-Control-Allow-Methods "GET, OPTIONS" env=LMS_UPLOAD_ORIGIN' \
+        '    Header always set Access-Control-Allow-Headers "Authorization" env=LMS_UPLOAD_ORIGIN' \
+        '    Header always merge Vary "Origin" env=LMS_UPLOAD_ORIGIN' \
         '    <FilesMatch "\.(php|phtml|phar|php[0-9]|cgi|pl|py|sh|shtml|htaccess)$">' \
         '        Require all denied' \
         '    </FilesMatch>' \

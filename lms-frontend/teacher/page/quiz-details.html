@@ -1,3 +1,4 @@
+<!-- fixerMarker: 2026-11-22 quiz-share-export-results-bank-picker -->
 <style>
   .tqd-wrap {
     display: grid;
@@ -270,6 +271,112 @@
     gap: 0.7rem;
   }
 
+  .tqd-muted {
+    font-size: 0.85rem;
+    color: #64748b;
+  }
+
+  .tqd-share-hint {
+    margin: 0;
+    font-size: 0.8rem;
+    color: #64748b;
+  }
+
+  .tqd-share-notice {
+    display: none;
+    border-radius: 8px;
+    padding: 0.55rem 0.7rem;
+    font-size: 0.8rem;
+  }
+
+  .tqd-share-notice.show {
+    display: block;
+  }
+
+  .tqd-share-notice.success {
+    background: #ecfdf5;
+    color: #065f46;
+    border: 1px solid #a7f3d0;
+  }
+
+  .tqd-share-notice.error {
+    background: #fef2f2;
+    color: #991b1b;
+    border: 1px solid #fecaca;
+  }
+
+  .tqd-share-notice.info {
+    background: #eff6ff;
+    color: #1e40af;
+    border: 1px solid #bfdbfe;
+  }
+
+  .tqd-share-list {
+    display: grid;
+    gap: 0.5rem;
+    max-height: 320px;
+    overflow-y: auto;
+  }
+
+  .tqd-share-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.65rem;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    padding: 0.65rem 0.75rem;
+    background: #fff;
+  }
+
+  .tqd-share-row:hover {
+    background: #f8fafc;
+  }
+
+  .tqd-share-row input[type="checkbox"] {
+    margin-top: 0.2rem;
+  }
+
+  .tqd-share-label {
+    display: grid;
+    gap: 0.2rem;
+    cursor: pointer;
+  }
+
+  .tqd-share-title {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: #0f172a;
+  }
+
+  .tqd-share-meta {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    font-size: 0.75rem;
+    color: #64748b;
+  }
+
+  .tqd-share-original {
+    background: #eff6ff;
+    border-color: #bfdbfe;
+  }
+
+  .tqd-share-badge {
+    background: #dbeafe;
+    color: #1e40af;
+    border-radius: 999px;
+    padding: 0.1rem 0.45rem;
+    font-weight: 700;
+  }
+
+  .tqd-modal-foot {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    padding: 0 1.2rem 1rem;
+    flex-wrap: wrap;
+  }
+
   .tqd-preview-item {
     border: 1px solid #e2e8f0;
     border-radius: 10px;
@@ -429,6 +536,9 @@
         <button id="quizPublishToggleBtn" class="tqd-btn-primary" type="button">
           <i class="fas fa-paper-plane"></i> Publish Quiz
         </button>
+        <button id="quizShareBtn" class="tqd-btn-secondary" type="button">
+          <i class="fas fa-share-alt"></i> Share
+        </button>
         <button
           id="quizExportQuestionsPdfBtn"
           class="tqd-btn-secondary"
@@ -516,5 +626,39 @@
       </button>
     </div>
     <div id="quizPreviewBody" class="tqd-modal-body"></div>
+  </div>
+</div>
+
+<div id="quizShareModal" class="tqd-modal-overlay" aria-hidden="true">
+  <div class="tqd-modal">
+    <div class="tqd-modal-head">
+      <h3>Share Quiz</h3>
+      <button
+        id="quizShareCloseBtn"
+        class="tqd-modal-close"
+        type="button"
+        aria-label="Close"
+      >
+        <i class="fas fa-times"></i>
+      </button>
+    </div>
+    <div class="tqd-modal-body">
+      <p class="tqd-share-hint">
+        Select the classes assigned to you that may take this quiz. The original
+        class is always included.
+      </p>
+      <div id="quizShareNotice" class="tqd-share-notice" role="status" aria-live="polite"></div>
+      <div id="quizShareList" class="tqd-share-list">
+        <div class="tqd-loading">Loading classes...</div>
+      </div>
+    </div>
+    <div class="tqd-modal-foot">
+      <button id="quizShareCancelBtn" class="tqd-btn-secondary" type="button">
+        Cancel
+      </button>
+      <button id="quizShareSaveBtn" class="tqd-btn-primary" type="button">
+        <i class="fas fa-check"></i> Save Sharing
+      </button>
+    </div>
   </div>
 </div>

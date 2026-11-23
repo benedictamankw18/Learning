@@ -1,5 +1,8 @@
 <?php
 
+// fixerMarker: 2026-11-22 quiz-share-export-results-bank-picker
+// fixerMarker: 2026-11-23 quiz-results-csv-total-points
+// fixerMarker: 2026-11-23 truefalse-result-answer-label
 /**
  * Standalone test runner for the LMS API.
  *
@@ -23,6 +26,9 @@ require_once __DIR__ . '/RefreshTokenRotationTest.php';
 require_once __DIR__ . '/QuizShuffleTest.php';
 require_once __DIR__ . '/QuizBacktrackingTest.php';
 require_once __DIR__ . '/QuizAvailabilityTest.php';
+require_once __DIR__ . '/QuizShareTest.php';
+require_once __DIR__ . '/QuizResultsExportTest.php';
+require_once __DIR__ . '/QuizResultReviewTest.php';
 require_once __DIR__ . '/QuestionCsvTest.php';
 require_once __DIR__ . '/QuestionBankSchemaTest.php';
 require_once __DIR__ . '/QuestionBankTest.php';

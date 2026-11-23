@@ -1,5 +1,6 @@
 <?php
 
+// fixerMarker: 2026-11-23 quiz-timer-autosubmit-fix
 declare(strict_types=1);
 
 use App\Config\Database;
@@ -497,4 +498,74 @@ test('Attempts started before progress tracking can catch up once', function () 
             $db->rollBack();
         }
     }
+});
+
+test('Timer auto-submit blanks do not trigger backtracking errors', function () {
+    $pdo = testDatabase();
+    if (!$pdo) {
+        skip('database is not reachable');
+    }
+    if (!testTableExists($pdo, 'quiz_submission_questions')
+        || !$pdo->query("SHOW COLUMNS FROM quiz_submission_questions LIKE 'answer_locked'")->fetch()) {
+        skip('run migrations/add_quiz_submission_progress.php');
+    }
+
+    $db = Database::getInstance()->getConnection();
+    $db->beginTransaction();
+
+    try {
+        $repo = new QuizRepository();
+        $attempt = backtrackingAttempt($repo, $pdo, $db, 'Timer autosubmit ' . uniqid(), 4);
+        $submissionId = $attempt['submission_id'];
+        $ids = $attempt['question_ids'];
+
+        $progress = $repo->recordSubmissionProgress($submissionId, 0, 1, 'First', true);
+        assertSame(null, $progress['error']);
+        assertSame(1, (int) $progress['furthest_position']);
+
+        $blankAutoSubmit = [
+            ['question_id' => $ids[0], 'answer' => 'First'],
+            ['question_id' => $ids[1], 'answer' => null],
+            ['question_id' => $ids[2], 'answer' => null],
+            ['question_id' => $ids[3], 'answer' => null],
+        ];
+
+        assertSame(
+            null,
+            $repo->validateLockedAnswers($submissionId, $blankAutoSubmit, true, true),
+            'Blank timer placeholders must not be treated as changed or unreached answers'
+        );
+
+        assertNotNull(
+            $repo->validateLockedAnswers($submissionId, $blankAutoSubmit, true, false),
+            'Normal submissions without the auto-submit flag must still be validated'
+        );
+
+        $changed = $blankAutoSubmit;
+        $changed[0]['answer'] = 'Changed after going back';
+        assertNotNull(
+            $repo->validateLockedAnswers($submissionId, $changed, true, true),
+            'Non-blank changed answers must still be rejected during auto-submit'
+        );
+    } finally {
+        if ($db->inTransaction()) {
+            $db->rollBack();
+        }
+    }
+});
+
+test('Timer auto-submit payload is explicit and does not send correctness flags', function () {
+    $root = dirname(__DIR__);
+    $projectRoot = dirname($root);
+
+    $js = (string) file_get_contents($projectRoot . '/lms-frontend/student/js/quizzes.js');
+    assertContains('auto_submit: isAutoSubmit ? 1 : 0', $js);
+    assertContains('answer: null', $js);
+    assertFalse(
+        strpos($js, 'is_correct: 1') !== false,
+        'Blank auto-submit answers must not carry client-side correctness flags'
+    );
+
+    $controller = (string) file_get_contents($root . '/src/Controllers/QuizController.php');
+    assertContains("!empty(\$data['auto_submit'])", $controller);
 });

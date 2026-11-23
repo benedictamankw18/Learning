@@ -1,3 +1,6 @@
+// fixerMarker: 2026-11-22 quiz-share-export-results-bank-picker
+// fixerMarker: 2026-11-23 quiz-timer-autosubmit-fix
+// fixerMarker: 2026-11-23 truefalse-result-answer-label
 /* ============================================
    Student Quizzes Module
    SPA fragment: student/page/quizzes.html
@@ -702,6 +705,26 @@
       .sort((a, b) => a.label.localeCompare(b.label));
   }
 
+  // Show review answers as "A. Dog" when the attempt snapshot has option text.
+  // True/false questions have no stored options: the student submits A/B, so
+  // display the normalized true/false value instead of the raw option label.
+  // Falls back to the raw value for essays and older attempts without options.
+  function formatReviewAnswer(answer, options, questionType) {
+    const raw = String(answer == null ? '' : answer);
+    if (raw === '' || raw === '-') {
+      return raw || '-';
+    }
+
+    if (String(questionType || '').trim().toLowerCase() === 'true_false') {
+      return normalizeReviewAnswer(raw, questionType);
+    }
+
+    const label = raw.trim().toUpperCase();
+    const match = normalizeQuestionOptions({ options: options })
+      .find((opt) => opt.label === label && opt.text);
+    return match ? label + '. ' + match.text : raw;
+  }
+
   function setAnswer(questionId, answerValue) {
     if (!S.take) return;
     S.take.answers[String(questionId)] = String(answerValue || '');
@@ -1007,6 +1030,9 @@
         const qid = String(q.question_id || idx);
         const yourAnswer = String(q.student_answer != null ? q.student_answer : (answers[qid] || '-'));
         const correctAnswer = String(q.correct_answer || '-');
+        const reviewOptions = Array.isArray(q.options) ? q.options : [];
+        const yourAnswerLabel = formatReviewAnswer(yourAnswer, reviewOptions, q.question_type);
+        const correctAnswerLabel = formatReviewAnswer(correctAnswer, reviewOptions, q.question_type);
         const explanation = String(q.explanation || '-');
         const hasBackendCorrectness = q.is_correct !== undefined && q.is_correct !== null;
         const isCorrect = hasBackendCorrectness
@@ -1016,8 +1042,8 @@
         return [
           '<article class="sq-review-item">',
           '<h6>Q' + (idx + 1) + '. ' + esc(String(q.question_text || '-')) + '</h6>',
-          '<p><strong>Your Answer:</strong> ' + esc(yourAnswer) + '</p>',
-          '<p><strong>Correct Answer:</strong> ' + esc(correctAnswer) + '</p>',
+          '<p><strong>Your Answer:</strong> ' + esc(yourAnswerLabel) + '</p>',
+          '<p><strong>Correct Answer:</strong> ' + esc(correctAnswerLabel) + '</p>',
           '<p><strong>Status:</strong> ' + (isCorrect ? '<span style="color:#166534;">Correct</span>' : '<span style="color:#991b1b;">Incorrect</span>') + '</p>',
           '<p><strong>Explanation:</strong> ' + esc(explanation) + '</p>',
           '</article>'
@@ -1073,7 +1099,9 @@
     }
 
     // Build payload for submission. For each question include either the provided answer,
-    // or if this is an auto-submit include a placeholder { answer: null, is_correct: 1 }.
+    // or if this is an auto-submit include a blank placeholder { answer: null }.
+    // Correctness is never sent by the client; the server grades against the
+    // immutable answer key each question was served with.
     const questionsPayload = (Array.isArray(S.take.questions) ? S.take.questions : []).map((q, idx) => {
       const qid = toNumber(q.question_id || q.id || (idx + 1), 0);
       const raw = (S.take.answers && (S.take.answers[String(qid)] !== undefined)) ? S.take.answers[String(qid)] : '';
@@ -1082,7 +1110,7 @@
         return { question_id: qid, answer: trimmed };
       }
       if (isAutoSubmit) {
-        return { question_id: qid, answer: null, is_correct: 1 };
+        return { question_id: qid, answer: null };
       }
       return null;
     }).filter((r) => r && r.question_id > 0);
@@ -1094,7 +1122,10 @@
     }
 
     try {
-      await QuizAPI.submit(S.take.submissionId, { answers: questionsPayload });
+      await QuizAPI.submit(S.take.submissionId, {
+        answers: questionsPayload,
+        auto_submit: isAutoSubmit ? 1 : 0
+      });
       const submissionRes = await QuizAPI.getSubmissionById(S.take.submissionId);
       const payload = submissionRes?.data || submissionRes || {};
       const questionsFromApi = Array.isArray(payload.questions) ? payload.questions : [];
