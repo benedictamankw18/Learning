@@ -1,6 +1,8 @@
 <?php
 
 // fixerMarker: 2026-11-22 quiz-share-export-results-bank-picker
+// fixerMarker: 2026-11-23 quiz-timer-autosubmit-fix
+// fixerMarker: 2026-11-23 quiz-results-csv-total-points
 namespace App\Repositories;
 
 use PDO;
@@ -536,10 +538,17 @@ class QuizRepository
      *
      * Rejects answers to questions that were never reached and answers that
      * were changed after the student moved on. Blank captures left by older
-     * clients carry no usable answer, so they are skipped. Returns null when
-     * the answers are acceptable.
+     * clients carry no usable answer, so they are skipped. Timer auto-submits
+     * may also send blank placeholders for unanswered questions; those are
+     * skipped so a timeout cannot be mistaken for a changed answer. Returns
+     * null when the answers are acceptable.
      */
-    public function validateLockedAnswers(int $submissionId, array $answers, bool $preventBacktracking): ?string
+    public function validateLockedAnswers(
+        int $submissionId,
+        array $answers,
+        bool $preventBacktracking,
+        bool $autoSubmit = false
+    ): ?string
     {
         if (!$preventBacktracking) {
             return null;
@@ -574,6 +583,15 @@ class QuizRepository
             }
 
             $position = $positions[$questionId];
+            $submitted = $this->normalizeLockedAnswer($answer['answer'] ?? '');
+
+            // Timer auto-submit fills unanswered questions with blank
+            // placeholders. They are not attempts to change an earlier answer
+            // or to answer a question that was never reached.
+            if ($autoSubmit && $submitted === '') {
+                continue;
+            }
+
             if ($position > $furthest) {
                 return 'This answer belongs to a question that was not reached in this attempt.';
             }
@@ -590,7 +608,6 @@ class QuizRepository
                 continue;
             }
 
-            $submitted = $this->normalizeLockedAnswer($answer['answer'] ?? '');
             if ($submitted !== $captured) {
                 return 'You cannot change an answer after moving to the next question.';
             }
@@ -1861,6 +1878,11 @@ class QuizRepository
                 qs.status,
                 qs.score,
                 qs.max_score,
+                qs.max_score AS total_points,
+                CASE
+                    WHEN qs.max_score > 0 THEN ROUND((qs.score / qs.max_score) * 100, 2)
+                    ELSE 0
+                END AS percentage,
                 qs.created_at AS started_at,
                 qs.submitted_at,
                 qs.graded_at,

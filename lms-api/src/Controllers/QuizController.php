@@ -1,6 +1,7 @@
 <?php
 
 // fixerMarker: 2026-11-22 quiz-share-export-results-bank-picker
+// fixerMarker: 2026-11-23 quiz-timer-autosubmit-fix
 namespace App\Controllers;
 
 use App\Repositories\QuizRepository;
@@ -1900,6 +1901,8 @@ class QuizController
 
         // Server-side backstop for "Prevent Going Back": a stale tab cannot
         // change an answer it already moved past, or answer an unreached question.
+        // Timer auto-submits send blank placeholders for unanswered questions;
+        // those are skipped by the validator so a timeout can still be graded.
         $quiz = $this->repo->findById((int) $submission['quiz_id']);
         if (!$quiz) {
             Response::error('Quiz not found', 404);
@@ -1909,7 +1912,8 @@ class QuizController
         $answerError = $this->repo->validateLockedAnswers(
             $id,
             $data['answers'],
-            !empty($quiz['prevent_backtracking'])
+            !empty($quiz['prevent_backtracking']),
+            !empty($data['auto_submit'])
         );
         if ($answerError !== null) {
             Response::error($answerError, 400);

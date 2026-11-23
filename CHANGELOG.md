@@ -1,8 +1,20 @@
 <!-- fixerMarker: 2026-11-22 quiz-share-export-results-bank-picker -->
+<!-- fixerMarker: 2026-11-23 quiz-timer-autosubmit-fix -->
+<!-- fixerMarker: 2026-11-23 quiz-results-csv-total-points -->
+<!-- fixerMarker: 2026-11-23 truefalse-result-answer-label -->
 
 # Changelog
 
 All notable changes to the Learning LMS are documented here.
+
+## [Unreleased] - 2026-11-23
+
+### Fixed
+
+- Timer expiry auto-submit no longer shows **“You cannot change an answer after moving to the next question.”** for blank unanswered questions.
+- Blank auto-submit answers no longer send the ignored `is_correct: 1` flag. Unanswered questions are still stored as blank, graded as `0`, and counted in the maximum score.
+- Quiz results CSV now shows real **Total Points** and **Percentage** instead of `0`; both are derived from the attempt's `max_score`.
+- Student result review now shows `true`/`false` instead of the raw `A`/`B` option label for True/False questions. Scoring and question status were already correct.
 
 ## [Unreleased] - 2026-11-22
 
